@@ -74,5 +74,5 @@ open "index (1).html"
 Built with ❤️ for **TechZeathon 2026** by the **Three Fall Team**, Haldia Institute of Technology.
 
 **Team Members:**
-- Aniket Pandey
-- *(Add other team members here)*
+- Aniket Pandey (Frontend and Backend ) 
+- 
