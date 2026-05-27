@@ -86,6 +86,8 @@ const Dashboard = ({ user }) => {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
       if (speechRecognitionRef.current) {
+        speechRecognitionRef.current.onend = null;
+        speechRecognitionRef.current.onerror = null;
         speechRecognitionRef.current.abort();
       }
     };
@@ -107,7 +109,7 @@ const Dashboard = ({ user }) => {
 
   const startLiveFeed = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       streamRef.current = stream;
 
       if (videoRef.current) {
@@ -147,6 +149,8 @@ const Dashboard = ({ user }) => {
     }
 
     if (speechRecognitionRef.current) {
+      speechRecognitionRef.current.onend = null;
+      speechRecognitionRef.current.onerror = null;
       speechRecognitionRef.current.abort();
       speechRecognitionRef.current = null;
     }
