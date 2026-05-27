@@ -305,6 +305,18 @@ def serve_uploaded_file(filename):
     )
 
 @app.route(
+    '/uploads/'
+)
+def list_uploads():
+    try:
+        files = os.listdir(app.config['UPLOAD_FOLDER'])
+        # Sort files by creation time
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(app.config['UPLOAD_FOLDER'], x)), reverse=True)
+        return jsonify({"files": files})
+    except Exception as e:
+        return jsonify({"files": []})
+
+@app.route(
     '/api/upload',
     methods=['POST']
 )
