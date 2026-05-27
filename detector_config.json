@@ -1,0 +1,15 @@
+{
+    "api_base": "http://localhost:5000",
+    "api_key": "",
+    "camera_index": 0,
+    "camera_location": "Camera 01",
+    "fall_frame_threshold": 8,
+    "alert_cooldown_seconds": 5,
+    "audio_enabled": true,
+    "distress_keywords": [
+        "help me", "help", "emergency", 
+        "fall", "save me", "ouch", "i fell"
+    ],
+    "reconnect_attempts": 5,
+    "reconnect_delay_seconds": 3
+}

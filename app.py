@@ -1,554 +1,567 @@
 import os
+import uuid
+import time
+import logging
+import threading
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
-from werkzeug.utils import secure_filename
-from datetime import datetime
 from twilio.rest import Client
 import google.generativeai as genai
 
-# =========================
-# LOAD ENV
-# =========================
+# Load environment configs
 load_dotenv()
 
+# Structured logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('fallingdown.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger('FallingDownAI.Server')
+
+# Import project configurations and database models
+from config import Config
+from models import Database
+from middleware import require_api_key, validate_incident_data, validate_lead_data
+
+START_TIME = time.time()
+
+# Configure Flask app
 app = Flask(__name__)
-CORS(app)
+app.config['SECRET_KEY'] = Config.SECRET_KEY
+app.config['MAX_CONTENT_LENGTH'] = Config.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
-# =========================
-# TWILIO CONFIG
-# =========================
-TWILIO_SID = os.getenv(
-    "TWILIO_ACCOUNT_SID"
+# Setup CORS with explicit production/local constraints
+CORS(app, 
+     origins=Config.ALLOWED_ORIGINS,
+     methods=['GET', 'POST', 'DELETE', 'OPTIONS'],
+     allow_headers=['Content-Type', 'X-API-Key', 'Authorization'])
+
+# Initialize rate limiting
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[Config.RATE_LIMIT_DEFAULT],
+    storage_uri='memory://'
 )
 
-TWILIO_TOKEN = os.getenv(
-    "TWILIO_AUTH_TOKEN"
-)
+# Connect to MongoDB with in-memory fallbacks
+db_connected = Database.connect()
+incident_logs_fallback = []
+leads_fallback = []
 
-TWILIO_PHONE = os.getenv(
-    "TWILIO_WHATSAPP_NUMBER"
-)
+# Twilio Client Configuration
+twilio_client = None
+if Config.TWILIO_SID and Config.TWILIO_TOKEN:
+    try:
+        twilio_client = Client(Config.TWILIO_SID, Config.TWILIO_TOKEN)
+    except Exception as e:
+        logger.error(f"Failed to initialize Twilio client: {e}")
 
-PUBLIC_URL = os.getenv(
-    "PUBLIC_URL"
-)
-
-CAREGIVERS = [
-
-    os.getenv(
-        "CAREGIVER_WHATSAPP_NUMBER"
-    ),
-
-    os.getenv(
-        "CAREGIVER2_WHATSAPP_NUMBER"
-    ),
-
-    os.getenv(
-        "CAREGIVER3_WHATSAPP_NUMBER"
-    )
-
-]
-
-twilio_client = Client(
-    TWILIO_SID,
-    TWILIO_TOKEN
-) if TWILIO_SID else None
+# Gemini AI Client Configuration
+if Config.GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=Config.GEMINI_API_KEY)
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini API: {e}")
 
 # =========================
-# GEMINI CONFIG
+# ASYNC TWILIO ALERTS
 # =========================
-GEMINI_API_KEY = os.getenv(
-    "GEMINI_API_KEY"
-)
-
-if GEMINI_API_KEY:
-    genai.configure(
-        api_key=GEMINI_API_KEY
-    )
-
-CHAT_SYSTEM_PROMPT = (
-    "You are the FallingDown AI Care Assistant. "
-    "Role: Help visitors understand the platform. "
-    "Tone: Professional, empathetic, assuring. "
-    "Constraints: Keep answers to 2 short paragraphs max."
-)
-
-# =========================
-# UPLOAD CONFIG
-# =========================
-UPLOAD_FOLDER = "uploads"
-
-os.makedirs(
-    UPLOAD_FOLDER,
-    exist_ok=True
-)
-
-app.config[
-    "UPLOAD_FOLDER"
-] = UPLOAD_FOLDER
-
-incident_logs = []
-leads_db = []
-
-# =========================
-# WHATSAPP ALERT
-# =========================
-def send_whatsapp_alert(
-    incident_data
-):
-
-    if not twilio_client:
+def send_whatsapp_alert(incident_data):
+    if not twilio_client or not Config.TWILIO_PHONE:
+        logger.warning("Twilio client or phone number is missing. WhatsApp alert skipped.")
         return False
 
     try:
-
-        location = incident_data.get(
-            "location",
-            "Camera 01"
-        )
-
-        movement = incident_data.get(
-            "movement_status",
-            "normal"
-        )
-
+        location = incident_data.get("location", "Camera 01")
+        movement = incident_data.get("movement_status", "normal")
+        timestamp = incident_data.get("timestamp_local", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        
         if movement == "audio_only":
-
             status = "AUDIO DISTRESS"
-
-            evidence = (
-                "⚠️ NO VIDEO "
-                "(Privacy Zone).\n"
-                "Distress voice detected."
-            )
-
+            evidence = "⚠️ NO VIDEO (Privacy Zone).\nDistress voice detected."
         elif movement in ["none", "fall_detected"]:
-
             status = "CRITICAL FALL"
-
-            evidence = (
-                "Subject motionless. Review evidence."
-            )
-
+            evidence = "Subject motionless. Review evidence."
         elif movement in ["slight", "moderate_fall"]:
-
             status = "MODERATE FALL"
-
-            evidence = (
-                "Movement detected."
-            )
-
+            evidence = "Movement detected."
         else:
-
             status = "NORMAL FALL"
-
-            evidence = (
-                "Safety check advised."
-            )
+            evidence = "Safety check advised."
 
         alert_msg = (
-
-            f"🚨 FALLINGDOWN AI 🚨\n\n"
+            f"🚨 FALLINGDOWN AI ALERT 🚨\n\n"
             f"Status: {status}\n"
-            f"Time: {incident_data['timestamp']}\n"
+            f"Time: {timestamp}\n"
             f"Location: {location}\n\n"
             f"{evidence}"
-
         )
 
         media_url = []
-
-        if incident_data.get("image_filename") and PUBLIC_URL:
-            
-            full_image_url = (
-                f"{PUBLIC_URL}/uploads/"
-                f"{incident_data['image_filename']}"
-            )
+        if incident_data.get("image_filename") and Config.PUBLIC_URL:
+            full_image_url = f"{Config.PUBLIC_URL}/uploads/{incident_data['image_filename']}"
             media_url.append(full_image_url)
 
-        for caregiver in CAREGIVERS:
-
+        for caregiver in Config.CAREGIVERS:
             if caregiver:
-
-                message = twilio_client.messages.create(
-
-                    from_=TWILIO_PHONE,
-                    body=alert_msg,
-                    to=caregiver,
-                    media_url=media_url if media_url else None
-
-                )
-
-                print(
-                    "✅ Sent:",
-                    caregiver,
-                    message.sid
-                )
-
+                try:
+                    message = twilio_client.messages.create(
+                        from_=Config.TWILIO_PHONE,
+                        body=alert_msg,
+                        to=caregiver,
+                        media_url=media_url if media_url else None
+                    )
+                    logger.info(f"✅ Alert dispatched to caregiver '{caregiver}' (SID: {message.sid})")
+                except Exception as ex:
+                    logger.error(f"❌ Failed to dispatch alert to caregiver '{caregiver}': {ex}")
         return True
-
     except Exception as e:
-
-        print(
-            "❌ WhatsApp failed:",
-            str(e)
-        )
-
+        logger.error(f"❌ WhatsApp system failure: {e}")
         return False
 
 # =========================
-# STATUS
+# SYSTEM SECURITY HEADERS
 # =========================
-@app.route(
-    '/api/status'
-)
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    return response
+
+# =========================
+# API ENDPOINTS
+# =========================
+
+@app.route('/api/v1/status')
+@app.route('/api/status')
 def status():
-
+    db_status = "connected" if db_connected else "in-memory fallback"
     return jsonify({
-
-        "status":
-        "Active"
-
+        "status": "Active",
+        "version": "1.0.0",
+        "database": db_status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": int(time.time() - START_TIME)
     })
 
-# =========================
-# INCIDENT
-# =========================
-@app.route(
-    '/api/incident',
-    methods=['POST']
-)
+@app.route('/api/v1/incident', methods=['POST'])
+@app.route('/api/incident', methods=['POST'])
+@require_api_key
+@limiter.limit(Config.RATE_LIMIT_INCIDENT)
 def incident():
+    raw_data = request.json
+    data, error = validate_incident_data(raw_data)
+    if error:
+        logger.warning(f"Validation failure for /api/v1/incident: {error}")
+        return jsonify({"error": error}), 400
 
-    data = request.json
-
-    new_incident = {
-
-        "id":
-        len(
-            incident_logs
-        ) + 1,
-
-        "timestamp":
-        datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        ),
-
-        "fall_detected":
-        data.get(
-            "fall",
-            False
-        ),
-
-        "movement_status":
-        data.get(
-            "movement",
-            "normal"
-        ),
-
-        "is_critical":
-        data.get(
-            "critical",
-            False
-        ),
-
-        "image_filename":
-        data.get(
-            "image_filename",
-            None
-        ),
-
-        "location":
-        data.get(
-            "location",
-            "Camera 01"
-        )
+    incident_doc = {
+        "id": int(time.time()),  # Keep integer compatibility with logs display UI
+        "incident_id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp_local": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fall_detected": data['fall'],
+        "movement_status": data['movement'],
+        "is_critical": data['critical'],
+        "image_filename": data['image_filename'],
+        "location": data['location'],
+        "source_ip": request.remote_addr
     }
 
-    incident_logs.append(
-        new_incident
-    )
+    if db_connected and Database.get_db() is not None:
+        try:
+            Database.get_db().incidents.insert_one(incident_doc.copy())
+        except Exception as e:
+            logger.error(f"MongoDB write failed: {e}. Writing to fallback cache.")
+            incident_logs_fallback.append(incident_doc)
+    else:
+        incident_logs_fallback.append(incident_doc)
 
-    print(
-        "[ALERT]",
-        new_incident
-    )
+    logger.info(f"🚨 Incident logged: {data['movement']} at {data['location']}")
 
-    if new_incident["is_critical"] or new_incident["movement_status"] == "fall_detected":
-
-        send_whatsapp_alert(
-            new_incident
+    # Async Twilio notification
+    if incident_doc["is_critical"] or data['movement'] == "fall_detected":
+        thread = threading.Thread(
+            target=send_whatsapp_alert,
+            args=(incident_doc,),
+            daemon=True
         )
+        thread.start()
 
     return jsonify({
+        "status": "logged",
+        "incident": incident_doc
+    }), 201
 
-        "status":
-        "logged",
-
-        "incident":
-        new_incident
-
-    }),201
-
-# =========================
-# PHOTO UPLOAD & SERVE
-# =========================
-@app.route(
-    '/uploads/<filename>'
-)
-def serve_uploaded_file(filename):
-
-    return send_from_directory(
-        app.config['UPLOAD_FOLDER'], 
-        filename
-    )
-
-@app.route(
-    '/uploads/'
-)
-def list_uploads():
-    try:
-        files = os.listdir(app.config['UPLOAD_FOLDER'])
-        # Sort files by creation time
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(app.config['UPLOAD_FOLDER'], x)), reverse=True)
-        return jsonify({"files": files})
-    except Exception as e:
-        return jsonify({"files": []})
-
-@app.route(
-    '/api/upload',
-    methods=['POST']
-)
-def upload():
-
-    if 'file' not in request.files:
-
-        return jsonify({
-            "error":
-            "No file"
-        }),400
-
-    file = request.files[
-        'file'
-    ]
-
-    filename = secure_filename(
-        file.filename
-    )
-
-    filepath = os.path.join(
-        UPLOAD_FOLDER,
-        filename
-    )
-
-    file.save(
-        filepath
-    )
-
-    print(
-        "📸 Saved:",
-        filepath
-    )
-
-    return jsonify({
-
-        "status":
-        "success",
-
-        "filename": 
-        filename,
-
-        "path":
-        filepath
-
-    })
-
-# =========================
-# LOGS & LEADS
-# =========================
-@app.route(
-    '/api/logs'
-)
+@app.route('/api/v1/logs')
+@app.route('/api/logs')
 def logs():
+    page = max(1, int(request.args.get('page', 1)))
+    limit = min(
+        int(request.args.get('limit', Config.DEFAULT_PAGE_SIZE)),
+        Config.MAX_PAGE_SIZE
+    )
+    skip = (page - 1) * limit
+
+    if db_connected and Database.get_db() is not None:
+        try:
+            db = Database.get_db()
+            total = db.incidents.count_documents({})
+            cursor = db.incidents.find({}, {'_id': 0}).sort('timestamp', -1).skip(skip).limit(limit)
+            logs_list = list(cursor)
+        except Exception as e:
+            logger.error(f"MongoDB count/query failed: {e}")
+            logs_list = list(reversed(incident_logs_fallback))[skip:skip+limit]
+            total = len(incident_logs_fallback)
+    else:
+        logs_list = list(reversed(incident_logs_fallback))[skip:skip+limit]
+        total = len(incident_logs_fallback)
 
     return jsonify({
-
-        "logs":
-        incident_logs
-
+        "logs": logs_list,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit
+        }
     })
 
-@app.route(
-    '/api/leads', 
-    methods=['GET', 'POST']
-)
+@app.route('/api/v1/leads', methods=['GET', 'POST'])
+@app.route('/api/leads', methods=['GET', 'POST'])
 def handle_leads():
-
     if request.method == 'POST':
+        raw_data = request.json
+        data, error = validate_lead_data(raw_data)
+        if error:
+            logger.warning(f"Validation failure for leads POST: {error}")
+            return jsonify({"error": error}), 400
 
-        data = request.json
+        data['created_at'] = datetime.now(timezone.utc).isoformat()
 
-        leads_db.append(
-            data
-        )
-
-        print(
-            "📥 New Lead Saved:",
-            data.get('name')
-        )
-
-        return jsonify({
-            "status": "success"
-        }), 201
-    
-    return jsonify({
-        "leads": leads_db
-    }), 200
-
-# =========================
-# GEMINI CHAT
-# =========================
-@app.route(
-    '/api/chat', 
-    methods=['POST']
-)
-def chat():
-
-    data = request.json
-
-    user_message = data.get(
-        "message", 
-        ""
-    )
-
-    history = data.get(
-        "history", 
-        ""
-    )
-
-    if not GEMINI_API_KEY:
-        print("⚠️ Warning: GEMINI_API_KEY is not set. Using mock responses for demo.")
-        msg_lower = user_message.lower()
-        if "help" in msg_lower or "support" in msg_lower:
-            reply = (
-                "I'm here to help! You can ask me about how our fall detection works, "
-                "how the privacy zones are managed, or how to configure Twilio notifications for caregivers."
-            )
-        elif "fall" in msg_lower or "detect" in msg_lower or "accuracy" in msg_lower:
-            reply = (
-                "FallingDown AI uses advanced pose estimation to track skeletal coordinates in real-time. "
-                "If it detects rapid downward acceleration or a subject remaining motionless on the floor, "
-                "it triggers an alert and sends a notification immediately."
-            )
-        elif "privacy" in msg_lower or "bathroom" in msg_lower or "camera" in msg_lower:
-            reply = (
-                "We value privacy. In sensitive areas like bathrooms, you can toggle 'Privacy Zone'. "
-                "This disables video processing entirely and uses acoustic monitoring to detect voice distress or impact sounds."
-            )
-        elif "pricing" in msg_lower or "cost" in msg_lower or "subscribe" in msg_lower:
-            reply = (
-                "We offer two main pricing tiers:\n"
-                "- **Home Care** at $49/month for individual smart camera monitoring.\n"
-                "- **Care Facilities** with custom pricing integrating directly into your existing CCTV network."
-            )
+        if db_connected and Database.get_db() is not None:
+            try:
+                db = Database.get_db()
+                existing = db.leads.find_one({"phone": data['phone']})
+                if existing:
+                    return jsonify({
+                        "status": "exists",
+                        "message": "This phone number is already registered."
+                    }), 200
+                db.leads.insert_one(data.copy())
+            except Exception as e:
+                logger.error(f"MongoDB leads write failed: {e}. Writing to fallback cache.")
+                leads_fallback.append(data)
         else:
-            reply = (
-                "That's a great question! FallingDown AI is a state-of-the-art elder care monitoring platform. "
-                "It uses edge AI to detect falls and distress sounds without requiring users to wear any tracking devices.\n\n"
-                "Let me know if you want to learn more about our setup, features, or integrations!"
-            )
+            leads_fallback.append(data)
+
+        logger.info(f"📥 New lead captured: {data.get('name')} ({data.get('role')})")
+        return jsonify({"status": "success"}), 201
+
+    else:
+        # GET leads is now a protected operation
+        # Apply require_api_key manually because route handles both GET and POST
+        provided_key = (
+            request.headers.get('X-API-Key') or 
+            request.args.get('api_key')
+        )
+        if Config.API_KEY and provided_key != Config.API_KEY:
+            logger.warning(f"Unauthorized GET /api/leads access attempt blocked from IP {request.remote_addr}")
+            return jsonify({"error": "Unauthorized"}), 401
+
+        if db_connected and Database.get_db() is not None:
+            try:
+                leads_list = list(Database.get_db().leads.find({}, {'_id': 0}).sort('created_at', -1))
+            except Exception as e:
+                logger.error(f"MongoDB leads query failed: {e}")
+                leads_list = list(reversed(leads_fallback))
+        else:
+            leads_list = list(reversed(leads_fallback))
+
         return jsonify({
-            "response": reply
+            "leads": leads_list,
+            "total": len(leads_list)
         }), 200
+
+@app.route('/api/v1/chat', methods=['POST'])
+@app.route('/api/chat', methods=['POST'])
+@limiter.limit(Config.RATE_LIMIT_CHAT)
+def chat():
+    if not Config.GEMINI_API_KEY:
+        logger.warning("Gemini API key is missing. Yielding fallback prompt mock responses.")
+        return jsonify({"error": "Gemini key not configured"}), 503
+
+    raw_data = request.json
+    if not raw_data:
+        return jsonify({"error": "Invalid request body"}), 400
+
+    user_message = str(raw_data.get("message", "")).strip()
+    if not user_message:
+        return jsonify({"error": "Message cannot be empty"}), 400
+
+    if len(user_message) > Config.CHAT_MAX_MESSAGE_LENGTH:
+        return jsonify({
+            "error": f"Message too long. Max {Config.CHAT_MAX_MESSAGE_LENGTH} characters."
+        }), 400
+
+    history = str(raw_data.get("history", ""))[:3000]
+
+    CHAT_SYSTEM_PROMPT = (
+        "You are the FallingDown AI Care Assistant. "
+        "Role: Help visitors understand the platform. "
+        "Tone: Professional, empathetic, reassuring. "
+        "Constraints: Keep answers to 2 short paragraphs max."
+    )
+
     prompt = (
-        f"System Rules: {CHAT_SYSTEM_PROMPT}\n\n"
+        f"{CHAT_SYSTEM_PROMPT}\n\n"
         f"Chat History:\n{history}\n\n"
         f"User: {user_message}\nAssistant:"
     )
 
-    print(
-        "🤖 Gemini AI is processing..."
-    )
-
     try:
+        model = genai.GenerativeModel(Config.GEMINI_MODEL)
+        result = [None]
+        error = [None]
 
-        model = genai.GenerativeModel(
-            'gemini-1.5-flash'
-        )
+        def generate():
+            try:
+                resp = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=Config.GEMINI_MAX_TOKENS,
+                        temperature=0.7
+                    )
+                )
+                result[0] = resp.text
+            except Exception as ex:
+                error[0] = str(ex)
 
-        response = model.generate_content(
-            prompt
-        )
+        # Threaded call with timeout limit of 15 seconds
+        t = threading.Thread(target=generate)
+        t.start()
+        t.join(timeout=15)
 
-        print(
-            "✅ Gemini AI replied!"
-        )
+        if t.is_alive():
+            logger.warning("Gemini generation timed out (limit: 15s)")
+            return jsonify({"error": "AI response timed out"}), 504
 
-        return jsonify({
-            "response": response.text
-        }), 200
+        if error[0]:
+            raise Exception(error[0])
+
+        return jsonify({"response": result[0]}), 200
 
     except Exception as e:
+        logger.error(f"Gemini execution exception: {e}")
+        return jsonify({"error": "AI service temporarily unavailable"}), 500
 
-        print(
-            "Gemini Error:", 
-            e
-        )
+@app.route('/uploads/<filename>')
+def serve_uploaded_file(filename):
+    # Prevent path traversal attacks
+    filename = os.path.basename(filename)
+    return send_from_directory(
+        Config.UPLOAD_FOLDER, 
+        filename
+    )
 
-        return jsonify({
-            "error": "AI Failed"
-        }), 500
+@app.route('/api/v1/upload', methods=['POST'])
+@app.route('/api/upload', methods=['POST'])
+@require_api_key
+def upload():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
 
-# =========================
-# DELETE INCIDENT / IMAGE
-# =========================
-@app.route(
-    '/api/incident/<int:incident_id>', 
-    methods=['DELETE']
-)
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    # Validate file extension
+    ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+    if ext not in Config.ALLOWED_EXTENSIONS:
+        logger.warning(f"Blocked invalid file upload extension '{ext}' from IP {request.remote_addr}")
+        return jsonify({"error": f"Invalid extension. Allowed: {', '.join(Config.ALLOWED_EXTENSIONS)}"}), 400
+
+    # Ensure unique safe filename
+    safe_filename = f"incident_{uuid.uuid4().hex[:12]}.{ext}"
+    filepath = os.path.join(Config.UPLOAD_FOLDER, safe_filename)
+
+    file.save(filepath)
+    logger.info(f"📸 Image uploaded successfully: {safe_filename}")
+
+    return jsonify({
+        "status": "success",
+        "filename": safe_filename,
+        "path": filepath
+    })
+
+@app.route('/api/v1/analytics')
+@app.route('/api/analytics')
+def analytics():
+    if db_connected and Database.get_db() is not None:
+        try:
+            db = Database.get_db()
+            pipeline = [
+                {"$group": {
+                    "_id": "$movement_status",
+                    "count": {"$sum": 1}
+                }}
+            ]
+            severity_data = list(db.incidents.aggregate(pipeline))
+            total = db.incidents.count_documents({})
+            last = db.incidents.find_one(
+                {}, {'_id': 0}, 
+                sort=[('timestamp', -1)]
+            )
+            counts = {s['_id']: s['count'] for s in severity_data}
+        except Exception as e:
+            logger.error(f"MongoDB analytics aggregation failed: {e}")
+            counts = {}
+            total = 0
+            last = None
+    else:
+        # Fallback counts from in-memory list
+        total = len(incident_logs_fallback)
+        counts = {}
+        for log in incident_logs_fallback:
+            status = log.get('movement_status', 'normal')
+            counts[status] = counts.get(status, 0) + 1
+        last = incident_logs_fallback[-1] if incident_logs_fallback else None
+    
+    return jsonify({
+        "total": total,
+        "severity": {
+            "critical": counts.get('fall_detected', 0),
+            "moderate": counts.get('moderate_fall', 0),
+            "audio": counts.get('audio_only', 0),
+            "normal": counts.get('normal', 0) + counts.get('none', 0)
+        },
+        "last_incident": last
+    })
+
+@app.route('/api/v1/incident/<int:incident_id>', methods=['DELETE'])
+@app.route('/api/incident/<int:incident_id>', methods=['DELETE'])
+@require_api_key
 def delete_incident(incident_id):
-    global incident_logs
-    original_len = len(incident_logs)
-    incident_logs = [log for log in incident_logs if log.get('id') != incident_id]
-    if len(incident_logs) < original_len:
-        print(f"🗑️ Deleted incident ID: {incident_id}")
+    deleted_count = 0
+    if db_connected and Database.get_db() is not None:
+        try:
+            result = Database.get_db().incidents.delete_one({"id": incident_id})
+            deleted_count = result.deleted_count
+        except Exception as e:
+            logger.error(f"MongoDB delete log failed: {e}")
+    
+    # Check fallback list too
+    global incident_logs_fallback
+    original_len = len(incident_logs_fallback)
+    incident_logs_fallback = [log for log in incident_logs_fallback if log.get('id') != incident_id]
+    if len(incident_logs_fallback) < original_len:
+        deleted_count += 1
+
+    if deleted_count > 0:
+        logger.info(f"🗑️ Deleted incident log ID: {incident_id}")
         return jsonify({"status": "success", "message": "Incident deleted"}), 200
+
     return jsonify({"error": "Incident not found"}), 404
 
-@app.route(
-    '/api/incident/<int:incident_id>/image', 
-    methods=['DELETE']
-)
+@app.route('/api/v1/incident/<int:incident_id>/image', methods=['DELETE'])
+@app.route('/api/incident/<int:incident_id>/image', methods=['DELETE'])
+@require_api_key
 def delete_incident_image(incident_id):
-    global incident_logs
-    for log in incident_logs:
+    cleared_image = False
+    
+    # Update in MongoDB
+    if db_connected and Database.get_db() is not None:
+        try:
+            db = Database.get_db()
+            incident = db.incidents.find_one({"id": incident_id})
+            if incident:
+                img_file = incident.get('image_filename')
+                if img_file:
+                    file_path = os.path.join(Config.UPLOAD_FOLDER, img_file)
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                            logger.info(f"Deleted file from disk: {file_path}")
+                        except Exception as e:
+                            logger.error(f"Error deleting file: {e}")
+                db.incidents.update_one({"id": incident_id}, {"$set": {"image_filename": None}})
+                cleared_image = True
+        except Exception as e:
+            logger.error(f"MongoDB incident update failed: {e}")
+
+    # Update in fallback list
+    for log in incident_logs_fallback:
         if log.get('id') == incident_id:
             img_file = log.get('image_filename')
             if img_file:
-                file_path = os.path.join(UPLOAD_FOLDER, img_file)
+                file_path = os.path.join(Config.UPLOAD_FOLDER, img_file)
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                        print(f"🗑️ Deleted file from disk: {file_path}")
+                        logger.info(f"Deleted fallback file from disk: {file_path}")
                     except Exception as e:
-                        print(f"⚠️ Error deleting file: {e}")
+                        logger.error(f"Error deleting file: {e}")
             log['image_filename'] = None
-            print(f"🗑️ Removed image from incident ID: {incident_id}")
-            return jsonify({"status": "success", "message": "Image deleted from incident"}), 200
+            cleared_image = True
+
+    if cleared_image:
+        logger.info(f"🗑️ Cleared image reference for incident ID: {incident_id}")
+        return jsonify({"status": "success", "message": "Image deleted from incident"}), 200
+
     return jsonify({"error": "Incident not found"}), 404
 
 # =========================
-# RUN
+# GLOBAL ERROR HANDLERS
 # =========================
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"error": "Bad request", "message": str(e)}), 400
+
+@app.errorhandler(401)
+def unauthorized(e):
+    return jsonify({"error": "Unauthorized"}), 401
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Endpoint not found"}), 404
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({"error": f"File too large. Max allowed size: {Config.MAX_UPLOAD_SIZE_MB}MB"}), 413
+
+@app.errorhandler(429)
+def rate_limited(e):
+    return jsonify({
+        "error": "Too many requests",
+        "message": "Please slow down. Rate limit exceeded."
+    }), 429
+
+@app.errorhandler(500)
+def server_error(e):
+    logger.critical(f"Unhandled server error encountered: {e}")
+    return jsonify({"error": "Internal server error"}), 500
+
+# Run Config
 if __name__ == '__main__':
-
-    print(
-        "🚀 FallingDown AI Backend"
-    )
-
+    os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
+    logger.info(f"🚀 Product-grade Flask Server starting on port {Config.PORT}")
+    logger.info(f"Mode: {'Development' if Config.DEBUG else 'Production'}")
+    
     app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=True
+        host=Config.HOST,
+        port=Config.PORT,
+        debug=Config.DEBUG
     )

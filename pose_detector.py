@@ -3,24 +3,69 @@ import numpy as np
 import requests
 import time
 import os
+import sys
+import json
+import signal
 import threading
 from datetime import datetime
-import speech_recognition as sr
 
-# API Config
-API_BASE = "http://localhost:5000"
+# =========================
+# CONFIGURATION MANAGEMENT
+# =========================
+def load_config():
+    try:
+        with open('detector_config.json', 'r') as f:
+            print("📖 Loaded configuration from detector_config.json")
+            return json.load(f)
+    except FileNotFoundError:
+        print("⚠️ detector_config.json not found. Using script defaults.")
+        return {}
 
-# Flags & State
+CONFIG = load_config()
+
+# Read configurations
+API_BASE = CONFIG.get('api_base', 'http://localhost:5000')
+API_KEY = CONFIG.get('api_key', '')
+CAMERA_INDEX = CONFIG.get('camera_index', 0)
+CAMERA_LOCATION = CONFIG.get('camera_location', 'Camera 01')
+FALL_FRAME_THRESHOLD = CONFIG.get('fall_frame_threshold', 8)
+ALERT_COOLDOWN_SECONDS = CONFIG.get('alert_cooldown_seconds', 5)
+AUDIO_ENABLED = CONFIG.get('audio_enabled', True)
+DISTRESS_KEYWORDS = CONFIG.get('distress_keywords', [
+    "help me", "help", "emergency", 
+    "fall", "save me", "ouch", "i fell"
+])
+
+# Global Tracking States
 latest_status = "SAFE"
 alert_triggered = False
 last_alert_time = 0
 audio_listening = True
+cap = None
 
+# =========================
+# SIGNAL TERMINATIONS
+# =========================
+def shutdown_handler(sig, frame):
+    global audio_listening, cap
+    print("\n🛑 Shutting down edge client gracefully...")
+    audio_listening = False
+    if cap is not None:
+        cap.release()
+    cv2.destroyAllWindows()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
+
+# =========================
+# INCIDENT DISPATCHER
+# =========================
 def send_incident(fall_detected, movement_status, is_critical, location, frame=None):
     global last_alert_time, alert_triggered
     current_time = time.time()
-    # Cooldown of 5 seconds to prevent duplicate spamming
-    if current_time - last_alert_time < 5:
+    
+    if current_time - last_alert_time < ALERT_COOLDOWN_SECONDS:
         return
     last_alert_time = current_time
 
@@ -28,11 +73,10 @@ def send_incident(fall_detected, movement_status, is_critical, location, frame=N
     if frame is not None:
         filename = f"incident_{int(time.time())}.jpg"
         temp_path = os.path.join("uploads", filename)
-        # Ensure uploads directory exists
         os.makedirs("uploads", exist_ok=True)
         cv2.imwrite(temp_path, frame)
         image_filename = filename
-        print(f"📸 Captured incident frame and saved as {filename}")
+        print(f"📸 Snapshot captured and saved locally as: {filename}")
 
     payload = {
         "fall": fall_detected,
@@ -42,22 +86,43 @@ def send_incident(fall_detected, movement_status, is_critical, location, frame=N
         "image_filename": image_filename
     }
 
+    # Setup headers with API key authentication
+    headers = {'Content-Type': 'application/json'}
+    if API_KEY:
+        headers['X-API-Key'] = API_KEY
+
     try:
-        res = requests.post(f"{API_BASE}/api/incident", json=payload)
+        # target versioned API endpoint /api/v1/
+        url = f"{API_BASE}/api/v1/incident"
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        
         if res.status_code == 201:
-            print(f"🚨 Incident successfully reported: {movement_status.upper()}")
+            print(f"🚨 Incident logged successfully in backend: {movement_status.upper()}")
             alert_triggered = True
         else:
-            print(f"❌ Failed to report incident: {res.text}")
+            print(f"❌ Failed to log incident: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"❌ Error connecting to backend: {e}")
+        print(f"❌ Connection error posting incident: {e}")
 
+# =========================
+# SPEECH AUDIO DISTRESS
+# =========================
 def audio_listener():
     global audio_listening
-    r = sr.Recognizer()
-    mic = sr.Microphone()
+    try:
+        import speech_recognition as sr
+    except ImportError:
+        print("❌ speech_recognition module not installed. Audio tracking disabled.")
+        return
 
-    print("🎙️ Audio safety listener started. Listening for 'help me' or distress keywords...")
+    r = sr.Recognizer()
+    try:
+        mic = sr.Microphone()
+    except Exception as ex:
+        print(f"❌ Failed to acquire microphone hardware: {ex}. Audio tracking disabled.")
+        return
+
+    print("🎙️ Audio distress listener started. Monitoring microphone...")
 
     while audio_listening:
         try:
@@ -65,116 +130,137 @@ def audio_listener():
                 r.adjust_for_ambient_noise(source, duration=1)
                 audio = r.listen(source, phrase_time_limit=3)
             
-            # Recognize speech
             text = r.recognize_google(audio).lower()
             print(f"🎙️ Heard: '{text}'")
 
-            distress_keywords = ["help me", "help", "emergency", "fall", "save me", "ouch", "help check"]
-            if any(kw in text for kw in distress_keywords):
-                print("🚨 Distress keyword detected! Sending alert...")
+            if any(kw in text for kw in DISTRESS_KEYWORDS):
+                print("🚨 Distress keyword recognized via mic!")
                 send_incident(
                     fall_detected=False,
                     movement_status="audio_only",
                     is_critical=True,
-                    location="Privacy Zone (Bathroom)"
+                    location=f"{CAMERA_LOCATION} (Voice Distress)"
                 )
         except sr.UnknownValueError:
-            # Audio was not clear enough
             pass
         except sr.RequestError as e:
-            print(f"⚠️ Speech Recognition service error: {e}")
+            print(f"⚠️ Speech Recognition service failure: {e}")
         except Exception as e:
-            print(f"⚠️ Audio listener exception: {e}")
-            time.sleep(1)
+            if audio_listening:
+                print(f"⚠️ Audio listener exception: {e}")
+                time.sleep(1)
 
+# =========================
+# BACKEND CONNECTION RETRY
+# =========================
+def wait_for_backend():
+    attempts = CONFIG.get('reconnect_attempts', 5)
+    delay = CONFIG.get('reconnect_delay_seconds', 3)
+    
+    print(f"📡 Testing connection to Flask backend at {API_BASE}/api/v1/status...")
+    
+    for attempt in range(1, attempts + 1):
+        try:
+            res = requests.get(f"{API_BASE}/api/v1/status", timeout=3)
+            if res.status_code == 200:
+                print("✅ Successfully connected to backend API.")
+                return True
+        except Exception:
+            pass
+        print(f"⏳ Backend not ready. Attempt {attempt}/{attempts}. Retrying in {delay}s...")
+        time.sleep(delay)
+        
+    print("⚠️ Backend unreachable after all attempts. Starting in offline local capture mode.")
+    return False
+
+# =========================
+# MAIN EXECUTION
+# =========================
 def main():
-    global alert_triggered
-    # Start audio listener thread
-    audio_thread = threading.Thread(target=audio_listener, daemon=True)
-    audio_thread.start()
+    global cap, alert_triggered
+    
+    # Check backend readiness
+    wait_for_backend()
 
-    cap = cv2.VideoCapture(0)
+    # Audio monitor initiation
+    if AUDIO_ENABLED:
+        audio_thread = threading.Thread(target=audio_listener, daemon=True)
+        audio_thread.start()
+    else:
+        print("Static configuration has 'audio_enabled': false. Audio thread disabled.")
+
+    # Initialize video capture index
+    cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
-        print("❌ Error: Could not open webcam.")
+        print(f"❌ Error: Could not open Video Capture index: {CAMERA_INDEX}")
         return
 
-    # Background subtractor for contour detection
+    # Background subtractor
     backSub = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=25, detectShadows=True)
 
     print("\n=============================================")
-    print("🚀 FallingDown AI - Real-time Edge AI Client")
+    # Visual HUD settings
+    print("🚀 FallingDown AI - Product-Grade Edge Client Active")
     print("=============================================")
-    print("Key controls on Video Window:")
-    print("  'f' : Force trigger Fall simulation")
-    print("  'a' : Force trigger Audio distress simulation")
-    print("  'r' : Reset status to SAFE")
+    print("Keyboard bindings on feed screen:")
+    print("  'f' : Force trigger Fall incident")
+    print("  'a' : Force trigger Audio distress incident")
+    print("  'r' : Reset alert status to SAFE")
     print("  'q' : Quit client")
     print("=============================================\n")
 
-    # Fall detection state variables
     prev_y = None
     consecutive_fall_frames = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print("❌ Error: Failed to grab frame.")
+            print("❌ Capture frame empty. Exiting feed loop.")
             break
 
-        # Flip horizontally for natural mirror view
         frame = cv2.flip(frame, 1)
         display_frame = frame.copy()
         h, w, _ = frame.shape
 
-        # Apply background subtraction
+        # Process frame details
         fgMask = backSub.apply(frame)
-
-        # Clean up mask with morphological operations
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         fgMask = cv2.morphologyEx(fgMask, cv2.MORPH_OPEN, kernel)
         fgMask = cv2.morphologyEx(fgMask, cv2.MORPH_CLOSE, kernel)
 
         fall_detected_this_frame = False
 
-        # Find contours of moving objects
+        # Find contours of moving subject
         contours, _ = cv2.findContours(fgMask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if contours:
-            # Filter contours by size to find the person
             large_contours = [c for c in contours if cv2.contourArea(c) > 3000]
             if large_contours:
-                # Get the largest moving contour (assumed to be the person)
                 person_contour = max(large_contours, key=cv2.contourArea)
                 x, y, bw, bh = cv2.boundingRect(person_contour)
 
-                centroid_y = y + bh / 2
-                aspect_ratio = bw / bh  # horizontal width / vertical height
-
-                # Fall Detection Heuristics:
-                # 1. High Aspect Ratio: When lying down, width is usually greater than height (aspect_ratio > 1.15)
-                # 2. Vertical Speed: If the top of the bounding box drops rapidly
-                is_horizontal = aspect_ratio > 1.15
-
+                aspect_ratio = bw / (bh if bh > 0 else 1)
+                is_horizontal = aspect_ratio > 1.2
+                
                 speed = 0
                 if prev_y is not None:
-                    speed = y - prev_y # positive means moving down
+                    speed = y - prev_y
 
-                # If moving down rapidly and aspect ratio is horizontal, or just aspect ratio is high and low in frame
-                if is_horizontal and (speed > 40 or y > h * 0.4):
+                # Fall heuristics
+                if is_horizontal and (speed > 35 or y > h * 0.45):
                     consecutive_fall_frames += 1
                 else:
                     consecutive_fall_frames = max(0, consecutive_fall_frames - 1)
 
-                # Trigger fall alert if conditions persist for 5 frames
-                if consecutive_fall_frames >= 5:
+                if consecutive_fall_frames >= FALL_FRAME_THRESHOLD:
                     fall_detected_this_frame = True
 
                 prev_y = y
 
-                # Draw bounding box and tracking metrics on the display
+                # Display bounding box HUD overlay
                 box_color = (0, 0, 255) if fall_detected_this_frame or alert_triggered else (0, 255, 0)
                 cv2.rectangle(display_frame, (x, y), (x + bw, y + bh), box_color, 2)
-                cv2.circle(display_frame, (int(x + bw/2), int(y + bh/2)), 5, (255, 0, 0), -1)
+                cv2.circle(display_frame, (int(x + bw/2), int(y + bh/2)), 4, (255, 0, 0), -1)
                 cv2.putText(display_frame, f"AR: {aspect_ratio:.2f}", (x, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 cv2.putText(display_frame, f"Speed: {speed}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             else:
@@ -182,57 +268,55 @@ def main():
         else:
             consecutive_fall_frames = max(0, consecutive_fall_frames - 1)
 
-        # Handle Alert States
+        # Trigger Alerts
         if fall_detected_this_frame:
             status_label = "FALL DETECTED!"
-            status_color = (0, 0, 255) # Red
+            status_color = (0, 0, 255)
             send_incident(
                 fall_detected=True,
                 movement_status="fall_detected",
                 is_critical=True,
-                location="Camera 01",
+                location=CAMERA_LOCATION,
                 frame=frame
             )
         elif alert_triggered:
             status_label = "ALERT ACTIVE"
-            status_color = (0, 165, 255) # Orange
+            status_color = (0, 165, 255)
         else:
             status_label = "SAFE"
-            status_color = (0, 255, 0) # Green
+            status_color = (0, 255, 0)
 
-        # Overlay status panel on video feed
+        # Status text overlay
         cv2.rectangle(display_frame, (10, 10), (320, 60), (0, 0, 0), -1)
         cv2.putText(display_frame, f"STATUS: {status_label}", (20, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
-        # Show frame
+        # Draw frame
         cv2.imshow("FallingDown AI - Live Guardian Feed", display_frame)
 
-        # Handle key inputs
+        # Key captures
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('f'):
-            print("⌨️ Keyboard trigger: Fall Incident Simulating...")
+            print("⌨️ Forced Fall incident Simulation...")
             send_incident(
                 fall_detected=True,
                 movement_status="fall_detected",
                 is_critical=True,
-                location="Camera 01",
+                location=CAMERA_LOCATION,
                 frame=frame
             )
         elif key == ord('a'):
-            print("⌨️ Keyboard trigger: Audio Distress Simulating...")
+            print("⌨️ Forced Audio distress Simulation...")
             send_incident(
                 fall_detected=False,
                 movement_status="audio_only",
                 is_critical=True,
-                location="Privacy Zone (Bathroom)"
+                location=f"{CAMERA_LOCATION} (Manual Audio Sim)"
             )
         elif key == ord('r'):
-            print("🔄 Keyboard trigger: Reset state to SAFE")
+            print("🔄 Resetting alert state to SAFE")
             alert_triggered = False
-            status_label = "SAFE"
-            status_color = (0, 255, 0)
 
     cap.release()
     cv2.destroyAllWindows()

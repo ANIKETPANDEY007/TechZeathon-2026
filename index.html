@@ -2,6 +2,19 @@
 <html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="FallingDown AI">
+    <link rel="manifest" href="data:application/json,{
+        &quot;name&quot;:&quot;FallingDown AI&quot;,
+        &quot;short_name&quot;:&quot;FallingAI&quot;,
+        &quot;description&quot;:&quot;Intelligent elder care monitoring&quot;,
+        &quot;start_url&quot;:&quot;./index.html&quot;,
+        &quot;display&quot;:&quot;standalone&quot;,
+        &quot;background_color&quot;:&quot;#020617&quot;,
+        &quot;theme_color&quot;:&quot;#2dd4bf&quot;
+    }">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FallingDown AI | Professional Elder Care</title>
     
@@ -1212,7 +1225,10 @@
                                 <i class="ph-fill ph-video-camera text-teal-400"></i> Camera 01 — Living Room
                             </div>
                             <div class="flex items-center gap-3">
-                                <span class="bg-teal-500/20 text-teal-400 border border-teal-500/30 text-[10px] font-bold px-2 py-0.5 rounded">AI: MONITORING</span>
+                                                                <button id="webcam-toggle-btn" onclick="toggleWebcamFeed()" class="bg-teal-500/20 text-teal-400 border border-teal-500/30 hover:bg-teal-500/30 text-[10px] font-bold px-2 py-0.5 rounded transition-colors mr-2 flex items-center gap-1">
+                                    <i class="ph-bold ph-video-camera"></i> Start Web Feed
+                                </button>
+                                <span class="bg-teal-500/20 text-teal-400 border border-teal-500/30 text-[10px] font-bold px-2 py-0.5 rounded mr-2">AI: MONITORING</span>
                                 <div class="h-4 w-px bg-white/20"></div>
                                 <div class="flex items-center gap-2">
                                     <i class="ph-fill ph-video-camera text-slate-400" id="icon-vid"></i>
@@ -1239,7 +1255,9 @@
                             </div>
 
                             <!-- Content injected via JS: Image or Grid or Audio Visualizer -->
-                            <div id="feed-content" class="w-full h-full flex items-center justify-center">
+                                                        <div id="feed-content" class="w-full h-full flex items-center justify-center">
+                                <video id="webcam-video" class="hidden" playsinline muted></video>
+                                <canvas id="webcam-canvas" class="w-full h-full object-contain hidden" width="320" height="240"></canvas>
                                 <!-- Default grid placeholder -->
                                 <div class="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px]"></div>
                                 <div class="text-center text-slate-600 relative z-10 flex flex-col items-center">
@@ -1252,7 +1270,7 @@
                         <!-- Status Footer -->
                         <div class="bg-navy-950 border-t border-white/5 p-4 flex justify-between items-center z-20 absolute bottom-0 w-full">
                             <span class="text-sm text-slate-400">Current AI Status:</span>
-                            <div id="dash-ai-status-large" class="text-xl font-bold flex items-center gap-2 text-slate-500">
+                            <div id="dash-ai-status-large" role="status" aria-live="polite" class="text-xl font-bold flex items-center gap-2 text-slate-500">
                                 <i class="ph-fill ph-circle text-sm"></i> WAITING
                             </div>
                         </div>
@@ -1305,13 +1323,13 @@
                     <div class="glass-panel p-4 border border-teal-500/20 bg-teal-500/5">
                         <h3 class="text-sm font-semibold text-teal-400 mb-3 flex items-center gap-2"><i class="ph-fill ph-lightning"></i> Quick Actions (Demo Mode)</h3>
                         <div class="grid grid-cols-3 gap-2">
-                            <button onclick="simulateApiIncident(true, 'fall_detected')" class="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg py-2 text-xs font-bold transition-colors">
+                            <button aria-label="Simulate critical fall" onclick="simulateApiIncident(true, 'fall_detected')" class="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded-lg py-2 text-xs font-bold transition-colors">
                                 🚨 Critical Fall
                             </button>
                             <button onclick="simulateApiIncident(false, 'moderate_fall')" class="bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border border-orange-500/30 rounded-lg py-2 text-xs font-bold transition-colors">
                                 ⚠️ Moderate
                             </button>
-                            <button onclick="resetDashboardUI()" class="bg-slate-700/50 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded-lg py-2 text-xs font-bold transition-colors flex items-center justify-center gap-1">
+                            <button aria-label="Reset dashboard views" onclick="resetDashboardUI()" class="bg-slate-700/50 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded-lg py-2 text-xs font-bold transition-colors flex items-center justify-center gap-1">
                                 <i class="ph-bold ph-arrows-clockwise"></i> Clear UI
                             </button>
                         </div>
@@ -1356,19 +1374,55 @@
     <!-- JAVASCRIPT LOGIC -->
     <!-- ============================================== -->
     <script>
-        // API Base
-        const API_BASE = 'http://localhost:5000';
+        // ==========================================
+        // CONFIG — Change API_BASE for deployment
+        // ==========================================
+        const CONFIG = {
+            API_BASE: window.location.hostname === 'localhost' || 
+                      window.location.hostname === '127.0.0.1'
+                ? 'http://localhost:5000'
+                : 'https://your-production-url.com',
+            API_VERSION: 'v1',
+            POLL_INTERVAL: 5000,
+            RECONNECT_INTERVAL: 10000
+        };
+
+        const API_BASE = CONFIG.API_BASE;
+        const API = `${API_BASE}/api/${CONFIG.CONFIG_API_VERSION || CONFIG.API_VERSION}`;
         
+        // Escape HTML for XSS prevention
+        function escapeHtml(unsafe) {
+            if (typeof unsafe !== 'string') return String(unsafe || '');
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         // State
         let pollInterval = null;
-        let chatHistory = [];
+        let chatHistory = loadChatHistory();
         let isPrivacyMode = false;
         let lastIncidentLogs = [];
+        let lastLogCount = -1;
+        let lastCriticalId = null;
         
         let demoInterval = null;
         let isDemoMode = false;
         let demoStep = 0;
         let liveFeedInterval = null;
+
+        // Native webcam state
+        let isWebcamActive = false;
+        let webcamStream = null;
+        let animationFrameId = null;
+        let bgModel = null;
+        let prevY = null;
+        let consecutiveFallFrames = 0;
+        let lastAlertTime = 0;
+        let speechRecognitionInstance = null;
 
         // --- ROUTING ---
         const routes = {
@@ -1394,6 +1448,15 @@
             // Clean up polling if leaving dashboard
             if (templateId !== 'dashboard') {
                 stopPolling();
+                stopWebcamFeed();
+            }
+
+            // Dashboard Auth Guard protection
+            if (templateId === 'dashboard') {
+                if (!sessionStorage.getItem('dashboard_authenticated')) {
+                    renderDashboardLogin();
+                    return;
+                }
             }
 
             // Animate out
@@ -1457,6 +1520,56 @@
             }
         }
 
+        function renderDashboardLogin() {
+            const root = document.getElementById('app-root');
+            root.innerHTML = `
+                <div class="min-h-screen flex items-center justify-center p-4">
+                    <div class="glass-panel p-8 rounded-2xl w-full max-w-sm border border-white/10 shadow-2xl relative">
+                        <div class="text-center mb-6">
+                            <i class="ph-fill ph-shield-check text-teal-400 text-5xl mb-3 block"></i>
+                            <h2 class="text-xl font-bold text-white">Dashboard Access</h2>
+                            <p class="text-slate-400 text-sm mt-1">Enter your access PIN</p>
+                        </div>
+                        <input 
+                            type="password" 
+                            id="pin-input"
+                            placeholder="Enter PIN"
+                            maxlength="6"
+                            class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 
+                                   text-white text-center text-2xl tracking-widest mb-4
+                                   focus:border-teal-500 focus:outline-none"
+                            onkeydown="if(event.key==='Enter') verifyPin()"
+                        >
+                        <button onclick="verifyPin()" 
+                            class="w-full bg-teal-500 hover:bg-teal-400 text-navy-950 
+                                   font-bold py-3 rounded-xl transition-all">
+                            Access Dashboard
+                        </button>
+                        <p class="text-slate-500 text-xs text-center mt-4">
+                            Default PIN: 1234
+                        </p>
+                    </div>
+                </div>
+            `;
+            root.style.opacity = '1';
+            root.style.transform = 'translateY(0)';
+        }
+
+        function verifyPin() {
+            const pin = document.getElementById('pin-input').value;
+            const correctPin = localStorage.getItem('dashboard_pin') || '1234';
+            
+            if (pin === correctPin) {
+                sessionStorage.setItem('dashboard_authenticated', 'true');
+                handleRoute();
+            } else {
+                const input = document.getElementById('pin-input');
+                input.classList.add('border-red-500');
+                input.value = '';
+                input.placeholder = 'Wrong PIN';
+            }
+        }
+
         // --- PAGE LOGIC: HOME ---
         function initHome() {
             // Generate Particles
@@ -1474,7 +1587,7 @@
             }
 
             // Quick status poll for hero
-            fetch(`${API_BASE}/api/status`)
+            fetch(`${API}/status`)
                 .then(res => {
                     document.getElementById('hero-backend-status').innerText = 'Online';
                     document.getElementById('hero-backend-status').className = 'font-semibold text-emerald-400';
@@ -1486,7 +1599,7 @@
                     document.getElementById('hero-backend-icon').className = 'ph-fill ph-hard-drives text-red-400';
                 });
             
-            fetch(`${API_BASE}/api/logs`)
+            fetch(`${API}/logs`)
                 .then(res => res.json())
                 .then(data => {
                     if (data.logs && data.logs.length > 0) {
@@ -1563,7 +1676,7 @@
             };
 
             try {
-                const res = await fetch(`${API_BASE}/api/leads`, {
+                const res = await fetch(`${API}/leads`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -1583,6 +1696,20 @@
                 btn.innerHTML = originalBtnHtml;
                 alert('Connection to backend failed. Please ensure Flask server is running.');
             }
+        }
+
+// Persist chatbot history
+        function saveChatHistory() {
+            try {
+                sessionStorage.setItem('chat_history', JSON.stringify(chatHistory.slice(-10)));
+            } catch(e) {}
+        }
+        
+        function loadChatHistory() {
+            try {
+                const saved = sessionStorage.getItem('chat_history');
+                return saved ? JSON.parse(saved) : [];
+            } catch(e) { return []; }
         }
 
         // --- CHATBOT ---
@@ -1616,7 +1743,7 @@
             inputEl.disabled = true;
             submitBtn.innerHTML = '<span class="spinner w-4 h-4"></span>';
 
-            appendChatMessage(msg, 'user');
+            appendChatMessage(msg, 'user'); saveChatHistory();
             
             // Show typing dots
             const container = document.getElementById('chatbot-messages');
@@ -1636,7 +1763,7 @@
             const historyText = chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n');
 
             try {
-                const res = await fetch(`${API_BASE}/api/chat`, {
+                const res = await fetch(`${API}/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: msg, history: historyText })
@@ -1645,7 +1772,7 @@
                 document.getElementById(dotsId).remove();
                 
                 if (data.response) {
-                    appendChatMessage(data.response, 'ai');
+                    appendChatMessage(data.response, 'ai'); saveChatHistory();
                 } else {
                     appendChatMessage("Sorry, I encountered an error.", 'ai');
                 }
@@ -1671,7 +1798,7 @@
                         <i class="ph-fill ${isUser ? 'ph-user' : 'ph-robot'} text-sm"></i>
                     </div>
                     <div class="${isUser ? 'bg-teal-500/20 border-teal-500/30 text-teal-50 rounded-tr-sm' : 'bg-white/5 border-white/10 text-slate-200 rounded-tl-sm'} border p-3 rounded-2xl text-sm shadow-sm max-w-[80%] leading-relaxed">
-                        ${text.replace(/\n/g, '<br/>')}
+                        ${escapeHtml(text).replace(/\n/g, '<br/>')}
                     </div>
                 </div>
             `;
@@ -1747,7 +1874,7 @@
 
             // 1. Status
             try {
-                await fetch(`${API_BASE}/api/status`);
+                await fetch(`${API}/status`);
                 updateStatusPill(true);
             } catch (e) {
                 updateStatusPill(false);
@@ -1755,14 +1882,14 @@
 
             // 2. Leads
             try {
-                const leadsRes = await fetch(`${API_BASE}/api/leads`);
+                const leadsRes = await fetch(`${API}/leads`);
                 const leadsData = await leadsRes.json();
                 renderLeads(leadsData.leads || []);
             } catch (e) {}
 
             // 3. Logs
             try {
-                const logsRes = await fetch(`${API_BASE}/api/logs`);
+                const logsRes = await fetch(`${API}/logs`);
                 const logsData = await logsRes.json();
                 
                 // If we reconnected, stop demo mode
@@ -1868,10 +1995,10 @@
             container.innerHTML = leads.slice().reverse().map(l => `
                 <div class="bg-white/5 p-2 rounded-lg border border-white/5 flex justify-between items-center">
                     <div>
-                        <div class="text-white text-xs font-semibold">${l.name}</div>
-                        <div class="text-slate-400 text-[10px]">${l.email || l.phone}</div>
+                        <div class="text-white text-xs font-semibold">${escapeHtml(l.name)}</div>
+                        <div class="text-slate-400 text-[10px]">${escapeHtml(l.email || l.phone)}</div>
                     </div>
-                    <span class="text-[10px] bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded-full whitespace-nowrap">${l.role}</span>
+                    <span class="text-[10px] bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded-full whitespace-nowrap">${escapeHtml(l.role)}</span>
                 </div>
             `).join('');
         }
@@ -1916,10 +2043,10 @@
                         <div class="flex-grow">
                             <div class="flex justify-between items-start mb-2">
                                 ${badge}
-                                <span class="text-[10px] text-slate-500 font-mono">${log.timestamp.split(' ')[1]}</span>
+                                <span class="text-[10px] text-slate-500 font-mono">${escapeHtml(log.timestamp.split(' ')[1])}</span>
                             </div>
                             <div class="text-xs text-slate-400 flex items-center gap-1">
-                                <i class="ph-fill ph-map-pin text-teal-400"></i> ${log.location || 'Camera 01'}
+                                <i class="ph-fill ph-map-pin text-teal-400"></i> ${escapeHtml(log.location || 'Camera 01')}
                             </div>
                         </div>
                         ${imgHtml}
@@ -2056,7 +2183,7 @@
 
         async function simulateApiIncident(isCritical, type) {
             try {
-                await fetch(`${API_BASE}/api/incident`, {
+                await fetch(`${API}/incident`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -2078,6 +2205,317 @@
             renderLogs([]);
             updateCameraFeedUI();
             updateAnalytics([]);
+        }
+
+        // --- WEBCAM & MIC LIVE MONITORING ---
+        async function toggleWebcamFeed() {
+            if (isWebcamActive) {
+                stopWebcamFeed();
+            } else {
+                await startWebcamFeed();
+            }
+        }
+
+        async function startWebcamFeed() {
+            try {
+                const video = document.getElementById('webcam-video');
+                const canvas = document.getElementById('webcam-canvas');
+                const placeholder = document.querySelector('#feed-content > div:not(.absolute)');
+                
+                if (!video || !canvas) return;
+
+                webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = webcamStream;
+                await video.play();
+
+                isWebcamActive = true;
+                
+                const btn = document.getElementById('webcam-toggle-btn');
+                if (btn) {
+                    btn.innerHTML = '<i class="ph-bold ph-video-camera"></i> Stop Web Feed';
+                    btn.classList.replace('text-teal-400', 'text-red-400');
+                    btn.classList.replace('border-teal-500/30', 'border-red-500/30');
+                }
+
+                video.classList.remove('hidden');
+                canvas.classList.remove('hidden');
+                if (placeholder) placeholder.classList.add('hidden');
+
+                // Start processing frames
+                bgModel = null;
+                prevY = null;
+                consecutiveFallFrames = 0;
+                animationFrameId = requestAnimationFrame(processWebcamFrame);
+
+                // Start Web Speech
+                startSpeechRecognition();
+                
+            } catch(e) {
+                console.error("Camera access failed:", e);
+                alert("Could not access camera/microphone. Verify permissions.");
+                isWebcamActive = false;
+            }
+        }
+
+        function stopWebcamFeed() {
+            isWebcamActive = false;
+            
+            const btn = document.getElementById('webcam-toggle-btn');
+            if (btn) {
+                btn.innerHTML = '<i class="ph-bold ph-video-camera"></i> Start Web Feed';
+                btn.classList.replace('text-red-400', 'text-teal-400');
+                btn.classList.replace('border-red-500/30', 'border-teal-500/30');
+            }
+
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+                webcamStream = null;
+            }
+
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+
+            if (speechRecognitionInstance) {
+                speechRecognitionInstance.onend = null;
+                speechRecognitionInstance.onerror = null;
+                speechRecognitionInstance.abort();
+                speechRecognitionInstance = null;
+            }
+
+            const video = document.getElementById('webcam-video');
+            const canvas = document.getElementById('webcam-canvas');
+            const placeholder = document.querySelector('#feed-content > div:not(.absolute)');
+            
+            if (video) video.classList.add('hidden');
+            if (canvas) canvas.classList.add('hidden');
+            if (placeholder) placeholder.classList.remove('hidden');
+        }
+
+        function startSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) return;
+
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = async (event) => {
+                const lastIdx = event.results.length - 1;
+                const text = event.results[lastIdx][0].transcript.toLowerCase();
+                console.log("Web heard:", text);
+
+                const keywords = ["help me", "help", "emergency", "fall", "save me", "ouch"];
+                if (keywords.some(kw => text.includes(kw))) {
+                    try {
+                        await fetch(`${API}/incident`, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                fall: false,
+                                movement: "audio_only",
+                                critical: true,
+                                location: "Camera 01 (Browser Voice)"
+                            })
+                        });
+                        pollDashboardData();
+                    } catch(err) {}
+                }
+            };
+
+            recognition.onerror = () => {
+                if (isWebcamActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            };
+
+            recognition.onend = () => {
+                if (isWebcamActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            };
+
+            recognition.start();
+            speechRecognitionInstance = recognition;
+        }
+
+        function processWebcamFrame() {
+            if (!isWebcamActive) return;
+
+            const video = document.getElementById('webcam-video');
+            const canvas = document.getElementById('webcam-canvas');
+            if (!video || !canvas) {
+                animationFrameId = requestAnimationFrame(processWebcamFrame);
+                return;
+            }
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                animationFrameId = requestAnimationFrame(processWebcamFrame);
+                return;
+            }
+
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // Draw horizontally flipped frame
+            ctx.translate(width, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, 0, 0, width, height);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+            if (isPrivacyMode) {
+                ctx.fillStyle = '#020617';
+                ctx.fillRect(0, 0, width, height);
+
+                ctx.fillStyle = '#a855f7';
+                const waveCount = 10;
+                const barWidth = 8;
+                const spacing = 6;
+                const startX = (width - (waveCount * (barWidth + spacing) - spacing)) / 2;
+
+                for (let i = 0; i < waveCount; i++) {
+                    const waveHeight = 15 + Math.sin(Date.now() * 0.005 + i * 0.3) * 40;
+                    ctx.fillRect(startX + i * (barWidth + spacing), (height - waveHeight) / 2, barWidth, waveHeight);
+                }
+                animationFrameId = requestAnimationFrame(processWebcamFrame);
+                return;
+            }
+
+            // Motion differencing
+            const imgData = ctx.getImageData(0, 0, width, height);
+            const data = imgData.data;
+
+            if (!bgModel || bgModel.length !== data.length) {
+                bgModel = new Float32Array(data.length);
+                for (let i = 0; i < data.length; i++) bgModel[i] = data[i];
+            }
+
+            let diffCount = 0;
+            let minX = width;
+            let maxX = 0;
+            let minY = height;
+            let maxY = 0;
+
+            const threshold = 30;
+            const alpha = 0.06;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i+1];
+                const b = data[i+2];
+
+                const bgR = bgModel[i];
+                const bgG = bgModel[i+1];
+                const bgB = bgModel[i+2];
+
+                bgModel[i] = bgR * (1 - alpha) + r * alpha;
+                bgModel[i+1] = bgG * (1 - alpha) + g * alpha;
+                bgModel[i+2] = bgB * (1 - alpha) + b * alpha;
+
+                const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+
+                if (diff > threshold * 3) {
+                    const idx = i / 4;
+                    const x = idx % width;
+                    const y = Math.floor(idx / width);
+
+                    if (x > 5 && x < width - 5 && y > 5 && y < height - 5) {
+                        diffCount++;
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+
+            let isFall = false;
+            if (diffCount > 1000) {
+                const bw = maxX - minX;
+                const bh = maxY - minY;
+                const ar = bw / (bh || 1);
+
+                let speed = 0;
+                if (prevY !== null) speed = minY - prevY;
+                prevY = minY;
+
+                const isHorizontal = ar > 1.2;
+                const isLow = minY > height * 0.45;
+
+                if (isHorizontal && (speed > 12 || isLow)) {
+                    consecutiveFallFrames++;
+                } else {
+                    consecutiveFallFrames = Math.max(0, consecutiveFallFrames - 1);
+                }
+
+                if (consecutiveFallFrames >= 8) {
+                    isFall = true;
+                }
+
+                // Render metrics
+                const isRedAlert = isFall || (Date.now() - lastAlertTime < 4000);
+                ctx.strokeStyle = isRedAlert ? '#ef4444' : '#10b981';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(minX, minY, bw, bh);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '8px monospace';
+                ctx.fillText(`AR: ${ar.toFixed(2)}`, minX, minY > 15 ? minY - 10 : 10);
+            } else {
+                consecutiveFallFrames = Math.max(0, consecutiveFallFrames - 1);
+                prevY = null;
+            }
+
+            const activeAlert = consecutiveFallFrames >= 8 || (Date.now() - lastAlertTime < 4000);
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+            ctx.fillRect(10, 10, 100, 24);
+            ctx.fillStyle = activeAlert ? '#ef4444' : '#10b981';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillText(activeAlert ? 'FALL DETECTED' : 'SAFE', 18, 26);
+
+            if (isFall && (Date.now() - lastAlertTime > 8000)) {
+                lastAlertTime = Date.now();
+                uploadFallFrame(canvas);
+            }
+
+            animationFrameId = requestAnimationFrame(processWebcamFrame);
+        }
+
+        async function uploadFallFrame(canvas) {
+            canvas.toBlob(async (blob) => {
+                if (!blob) return;
+
+                const filename = `incident_webcam_${Date.now()}.jpg`;
+                const file = new File([blob], filename, { type: 'image/jpeg' });
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const resUpload = await fetch(`${API}/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const uploadData = await resUpload.json();
+                    
+                    await fetch(`${API}/incident`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            fall: true,
+                            movement: "fall_detected",
+                            critical: true,
+                            location: "Camera 01 (Browser Webcam)",
+                            image_filename: uploadData.filename
+                        })
+                    });
+                    pollDashboardData();
+                } catch(err) {
+                    console.error("Webcam incident upload failed:", err);
+                }
+            }, 'image/jpeg', 0.85);
         }
 
         // --- MODAL LOGIC ---

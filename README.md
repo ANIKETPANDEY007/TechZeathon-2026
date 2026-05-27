@@ -1,78 +1,74 @@
-# FallingDown AI 🛡️
+# FallingDown AI — Elder Care Monitoring Platform
 
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Flask](https://img.shields.io/badge/Flask-000000?style=for-the-badge&logo=flask&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
-![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)
-![Twilio](https://img.shields.io/badge/Twilio-F22F46?style=for-the-badge&logo=Twilio&logoColor=white)
-![Gemini AI](https://img.shields.io/badge/Gemini_AI-8E75B2?style=for-the-badge&logo=googlebard&logoColor=white)
+FallingDown AI is a state-of-the-art non-wearable elder care monitoring platform. It turns any home smart camera or webcam into a real-time safety guardian. Using background differencing and computer vision heuristics, the platform detects physical falls and acoustic distress sounds without requiring the resident to wear tracking tags or pendants.
 
-FallingDown AI is a privacy-first, edge-computed elder care monitoring platform that transforms ordinary smart cameras into intelligent emergency guardians. Built with an emphasis on proactive intelligence rather than simple recording, it utilizes advanced skeletal tracking to detect rapid downward motion or unusual resting postures indicative of a fall. The system operates entirely locally for maximum privacy, features an audio-only mode for sensitive areas, and immediately triggers an automated escalation chain—alerting caregivers and family members via WhatsApp with vital evidence the moment an incident occurs.
+---
 
-## ✨ Features
+## 🏗️ Architecture
 
-- **Automated Fall Detection:** Real-time skeletal motion analysis to identify critical falls within 3 seconds.
-- **Privacy-First Edge AI:** Video processing happens locally. No video stream is sent to the cloud.
-- **Audio Safety Mode:** A zero-video, acoustic-only monitoring mode tailored for highly private zones like bathrooms.
-- **Instant WhatsApp Alerts:** Automatic multi-tier escalation (duty nurse -> family) with blurred evidence photos powered by Twilio.
-- **Hardware Agnostic:** Retrofits effortlessly into existing IP/RTSP camera networks without the need for wearables.
-- **Live Monitoring Dashboard:** An enterprise-grade, single-page dashboard featuring live frame viewing, analytics, API polling, and an integrated Gemini AI chatbot assistant.
+The platform consists of three main components:
+1. **Flask API Backend (`app.py`)**: Namespaced under `/api/v1/`, this Python backend connects to a MongoDB instance (with memory fallback), manages twilio dispatch threads asynchronously, applies rate limits, sanitizes user leads, and uses the Google Gemini `gemini-2.0-flash` model.
+2. **Edge Client Tracker (`pose_detector.py`)**: A Python-based edge vision processor utilizing OpenCV to analyze motion trajectories, calculate centroid rates, and report incidents using authorization headers.
+3. **Monolithic Dashboard (`index.html`)**: A dark-mode, glassmorphic single-page web app implementing local PIN security guards (`1234` by default), Stored XSS protection, persistent session chatbot history, PWA manifests, and native browser-based live webcam differencing fall/distress alerts.
 
-## 📸 Screenshots
+---
 
-> *Add screenshots of the live dashboard, landing page, and WhatsApp alert here.*
-> 
-> ![Dashboard Placeholder](https://via.placeholder.com/800x450.png?text=Dashboard+Screenshot)
+## 📦 File Structure
 
-## 🚀 Setup Guide
-
-Follow these steps to run the FallingDown AI platform locally.
-
-### Step 1: Clone the Repository
-```bash
-git clone https://github.com/ANIKETPANDEY007/TechZeathon-2026.git
-cd "TechZeathon-2026"
 ```
-
-### Step 2: Install Requirements
-Make sure you have Python 3 installed. Then install the necessary dependencies:
-```bash
-pip install flask flask-cors python-dotenv twilio google-generativeai werkzeug
-```
-
-### Step 3: Set Environment Variables
-Create a `.env` file in the root directory and configure the following variables for Twilio and Gemini integrations:
-```env
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_token
-TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
-CAREGIVER_WHATSAPP_NUMBER=whatsapp:+91XXXXXXXXXX
-CAREGIVER2_WHATSAPP_NUMBER=whatsapp:+91XXXXXXXXXX
-CAREGIVER3_WHATSAPP_NUMBER=whatsapp:+91XXXXXXXXXX
-PUBLIC_URL=http://localhost:5000
-GEMINI_API_KEY=your_gemini_api_key
-```
-
-### Step 4: Run the Backend
-Start the Flask application which runs the API and serves the uploaded images.
-```bash
-python app.py
-```
-*The server will start running on `http://localhost:5000`.*
-
-### Step 5: Open the Frontend
-Since the frontend is a zero-build Single Page Application, simply locate the `index (1).html` file in your project folder and open it directly in your web browser (Chrome, Edge, Firefox, etc.).
-```bash
-# Example on macOS:
-open "index (1).html"
+.
+├── app.py                  # Namespaced Flask API Server
+├── pose_detector.py        # Edge client visual processor
+├── config.py               # Central environment configurations
+├── models.py               # MongoDB collection indexes
+├── middleware.py           # Rate limiters & input sanitization
+├── index.html              # Secure Monolithic UI Dashboard (PWA)
+├── requirements.txt        # Python package dependencies
+├── .env.example            # Environment variables configuration template
+├── .gitignore              # Git ignored paths filters
+└── README.md               # Product documentation
 ```
 
 ---
 
-## 🏆 Credits
+## ⚙️ Quick Start
 
-Built with ❤️ for **TechZeathon 2026** by the **Three Fall Team**, Haldia Institute of Technology.
+### 1. Configure the Environment
+Copy the example environment file and update with your API keys:
+```bash
+cp .env.example .env
+```
 
 **Team Members:**
-- Aniket Pandey (Frontend and Backend ) 
-- 
+- Aniket Pandey (Frontend and Backend)
+
+Set up your variables:
+* `GEMINI_API_KEY`: Google AI Studio API Key.
+* `MONGO_URI`: MongoDB connection string.
+* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`: Credentials to send WhatsApp notifications.
+* `CAREGIVER_WHATSAPP_NUMBER`: Recipient phone number (e.g. `whatsapp:+91XXXXXXXXXX`).
+
+### 2. Run the Backend API
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Launch the Flask backend:
+```bash
+python app.py
+```
+*The server logs actions directly to `fallingdown.log` and the standard console.*
+
+### 3. Open the Frontend
+Simply open `index.html` in any web browser. To test the dashboard:
+1. Navigate to `#dashboard`.
+2. Enter the default access PIN: `1234`.
+3. Use the **Start Web Feed** button to test the native camera tracking on your laptop!
+
+### 4. Run the Edge Vision Client
+Run the edge processor script:
+```bash
+python pose_detector.py
+```
+*Make sure to configure the correct API keys in your `detector_config.json` before connecting to a secured production backend.*
