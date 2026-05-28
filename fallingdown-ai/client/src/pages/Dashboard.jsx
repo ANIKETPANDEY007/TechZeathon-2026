@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
-  Camera, Record, HardDrives, Users, MapPin, 
+  Camera, Record, HardDrives, Users,
   WarningCircle, ShieldCheck, BugBeetle, MicrophoneStage,
   ArrowsOut, ArrowsIn
 } from '@phosphor-icons/react';
@@ -10,7 +10,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { useIncidents } from '../hooks/useIncidents';
 import { useMLStatus } from '../hooks/useMLStatus';
 import IncidentCard from '../components/IncidentCard';
-import { postIncident, fetchLeads, getImageUrl, uploadPhoto, fetchLogs } from '../api/fallingdown';
+import { postIncident, fetchLeads, uploadPhoto } from '../api/fallingdown';
 import toast from 'react-hot-toast';
 import { format, subDays } from 'date-fns';
 
@@ -435,32 +435,38 @@ const Dashboard = ({ user }) => {
     return format(d, 'MMM dd');
   }).reverse();
 
-  // Mocked data grouping for the bar chart (since we might not have a week of real data yet)
   const barData = last7Days.map(dateStr => ({
     name: dateStr,
     incidents: logs.filter(l => {
       if (!l.timestamp) return false;
       const parsed = new Date(l.timestamp.includes(' ') ? l.timestamp.replace(' ', 'T') : l.timestamp);
       return !isNaN(parsed.getTime()) && format(parsed, 'MMM dd') === dateStr;
-    }).length || Math.floor(Math.random() * 3) // Add some mock data if empty for visual
+    }).length
   }));
 
-  const pieData = [
-    { name: 'Critical Fall', value: logs.filter(l => l.movement_status === 'fall_detected').length || 1, color: '#ef4444' },
-    { name: 'Moderate Fall', value: logs.filter(l => l.movement_status === 'moderate_fall').length || 2, color: '#f97316' },
-    { name: 'Normal', value: logs.filter(l => l.movement_status === 'normal' || !l.movement_status).length || 5, color: '#10b981' },
-    { name: 'Audio', value: logs.filter(l => l.movement_status === 'audio_only').length || 1, color: '#a855f7' },
-  ];
+  const criticalCount = logs.filter(l => l.movement_status === 'fall_detected').length;
+  const warningCount = logs.filter(l => l.movement_status === 'moderate_fall').length;
+  const audioCount = logs.filter(l => l.movement_status === 'audio_only').length;
+  const normalCount = logs.filter(l => l.movement_status === 'normal' || !l.movement_status).length;
 
-  const latestImageLog = [...logs].reverse().find(l => l.image_filename);
-  const feedImageUrl = latestImageLog ? getImageUrl(latestImageLog.image_filename) : null;
+  const pieData = [
+    { name: 'Critical Fall', value: criticalCount, color: '#ef4444' },
+    { name: 'Moderate Fall', value: warningCount, color: '#f97316' },
+    { name: 'Normal', value: normalCount, color: '#10b981' },
+    { name: 'Audio', value: audioCount, color: '#a855f7' },
+  ];
+  const visiblePieData = pieData.filter(item => item.value > 0);
+  const hasPieData = visiblePieData.length > 0;
+
+  const aiStatusLabel = latestStatus === 'NORMAL' ? 'All clear' : latestStatus.replace('_', ' ');
+  const aiStatusClass = latestStatus === 'CRITICAL' ? 'critical' : latestStatus === 'WARNING' ? 'warning' : latestStatus === 'AUDIO_DISTRESS' ? 'audio' : 'safe';
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto min-h-screen">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="dashboard-page p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto min-h-screen">
       
       {/* Demo Mode warning */}
       {!user && (
-        <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-yellow-500/20 border border-amber-500/30 rounded-2xl p-4 mb-6 shadow-md flex flex-col sm:flex-row justify-between items-center gap-4 backdrop-blur-sm">
+        <div className="dashboard-notice">
           <div className="flex items-center gap-3">
             <span className="flex h-3 w-3 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
@@ -481,25 +487,47 @@ const Dashboard = ({ user }) => {
       )}
 
       {/* Top Status Bar */}
-      <div className="flex flex-col md:flex-row justify-between items-center bg-navy-900 border border-white/10 rounded-2xl p-4 mb-6 shadow-lg">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-navy-950 px-4 py-2 rounded-xl border border-white/5">
-            <HardDrives size={20} className={isOnline ? 'text-emerald-400' : 'text-red-400'} />
-            <span className="text-sm font-semibold text-slate-300">
-              {isOnline ? '🟢 Backend Online' : '🔴 Backend Offline'}
-            </span>
-          </div>
-          <div className="text-xs text-slate-500">
-            Last checked: {lastChecked.toLocaleTimeString()}
-          </div>
+      <div className="dashboard-hero">
+        <div>
+          <div className="badge badge-blue" style={{ marginBottom: '0.85rem' }}>Live Dashboard</div>
+          <h1>Care Command Center</h1>
+          <p>Monitor camera feeds, review recent incidents, and keep the care team aligned from one focused workspace.</p>
         </div>
-        
-        <div className="mt-4 md:mt-0 flex items-center gap-3 bg-navy-950 px-5 py-2 rounded-xl border border-white/5">
-          <span className="text-sm text-slate-400">Network AI Status:</span>
-          {latestStatus === 'NORMAL' && <span className="text-emerald-400 font-bold flex items-center gap-1"><ShieldCheck /> NORMAL</span>}
-          {latestStatus === 'WARNING' && <span className="text-orange-400 font-bold flex items-center gap-1"><WarningCircle /> WARNING</span>}
-          {latestStatus === 'CRITICAL' && <span className="text-red-400 font-bold flex items-center gap-1 animate-pulse"><Record weight="fill" /> CRITICAL</span>}
-          {latestStatus === 'AUDIO_DISTRESS' && <span className="text-purple-400 font-bold flex items-center gap-1"><MicrophoneStage /> AUDIO DISTRESS</span>}
+
+        <div className="dashboard-status-grid">
+          <div className={`dashboard-status-card ${isOnline ? 'safe' : 'critical'}`}>
+            <div className="dashboard-status-icon">
+              <HardDrives size={20} />
+            </div>
+            <div>
+              <span>Backend</span>
+              <strong>{isOnline ? 'Online' : 'Offline'}</strong>
+              <small>Checked {lastChecked.toLocaleTimeString()}</small>
+            </div>
+          </div>
+          <div className={`dashboard-status-card ${aiStatusClass}`}>
+            <div className="dashboard-status-icon">
+              {latestStatus === 'NORMAL' && <ShieldCheck size={20} />}
+              {latestStatus === 'WARNING' && <WarningCircle size={20} />}
+              {latestStatus === 'CRITICAL' && <Record weight="fill" size={20} />}
+              {latestStatus === 'AUDIO_DISTRESS' && <MicrophoneStage size={20} />}
+            </div>
+            <div>
+              <span>AI Status</span>
+              <strong>{aiStatusLabel}</strong>
+              <small>Active incidents only</small>
+            </div>
+          </div>
+          <div className="dashboard-status-card neutral">
+            <div className="dashboard-status-icon">
+              <Record size={20} />
+            </div>
+            <div>
+              <span>Incidents</span>
+              <strong>{logs.length}</strong>
+              <small>{criticalCount} critical logged</small>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -510,18 +538,21 @@ const Dashboard = ({ user }) => {
           <div className="xl:col-span-2 space-y-6">
           
           {/* Camera Feed Simulator */}
-          <div className="glass-panel overflow-hidden border border-white/10 relative">
-            <div className="bg-navy-950 p-3 border-b border-white/5 flex justify-between items-center relative z-10">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-300">
-                <Camera size={18} className="text-teal-400" /> Camera 01 — Living Room
+          <div className="glass-panel dashboard-feed-panel overflow-hidden relative">
+            <div className="dashboard-panel-header">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Camera size={18} className="text-blue-300" /> Camera 01 — Living Room
+                </div>
+                <p>Local monitoring feed with on-device motion analysis</p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="dashboard-actions">
                 <button
                   onClick={toggleLiveFeed}
-                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 font-semibold ${
+                  className={`dashboard-action-button ${
                     isLiveFeedActive
-                      ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 animate-pulse'
-                      : 'bg-teal-500/20 text-teal-400 hover:bg-teal-500/30 border border-teal-500/30'
+                      ? 'active'
+                      : ''
                   }`}
                 >
                   {isLiveFeedActive ? (
@@ -537,11 +568,11 @@ const Dashboard = ({ user }) => {
                 <button 
                   onClick={handleSimulate} 
                   disabled={isSimulating || !isOnline}
-                  className="text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg border border-red-500/30 transition-colors flex items-center gap-1 disabled:opacity-50"
+                  className="dashboard-action-button danger"
                 >
                   <BugBeetle /> Simulate Fall
                 </button>
-                <div className="flex items-center gap-2 text-xs">
+                <div className="dashboard-privacy-toggle">
                   <span className="text-slate-400">Privacy Zone:</span>
                   <button 
                     onClick={() => setPrivacyMode(!privacyMode)}
@@ -553,7 +584,7 @@ const Dashboard = ({ user }) => {
               </div>
             </div>
             
-            <div className="aspect-video bg-black relative flex items-center justify-center overflow-hidden">
+            <div className="dashboard-video-frame aspect-video bg-black relative flex items-center justify-center overflow-hidden">
               <video ref={videoRef} className="hidden" playsInline muted />
               
               {isLiveFeedActive ? (
@@ -592,30 +623,11 @@ const Dashboard = ({ user }) => {
                 </div>
               ) : (
                 <>
-                  {feedImageUrl ? (
-                    <img src={feedImageUrl} alt="Live feed" className="w-full h-full object-contain opacity-80" />
-                  ) : (
-                    <div className="text-slate-600 flex flex-col items-center">
-                      <Camera size={48} className="mb-2 opacity-50" />
-                      <span>Waiting for feed...</span>
-                    </div>
-                  )}
-                  
-                  {/* Overlay UI */}
-                  {feedImageUrl && (
-                    <>
-                      <div className="absolute top-4 right-4 flex items-center gap-2">
-                        <span className="flex h-3 w-3 relative">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-                        </span>
-                        <span className="text-white text-xs font-mono drop-shadow-md bg-black/50 px-2 py-1 rounded">REC</span>
-                      </div>
-                      <div className="absolute bottom-4 left-4 text-white/70 text-xs font-mono drop-shadow-md bg-black/50 px-2 py-1 rounded">
-                        {format(new Date(), 'yyyy-MM-dd HH:mm:ss')}
-                      </div>
-                    </>
-                  )}
+                  <div className="dashboard-standby">
+                    <Camera size={54} />
+                    <strong>Live feed is on standby</strong>
+                    <span>Start the feed to run local fall detection. Previous incident images stay in the log, not the live preview.</span>
+                  </div>
                 </>
               )}
             </div>
@@ -623,9 +635,9 @@ const Dashboard = ({ user }) => {
 
           {/* Analytics Row */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="glass-panel p-5 border border-white/10 h-72 flex flex-col">
+            <div className="glass-panel p-5 h-72 flex flex-col">
               <h3 className="text-sm font-semibold text-slate-300 mb-4">Incidents (Last 7 Days)</h3>
-              <div className="flex-1 w-full">
+              <div className="flex-1 w-full min-w-0 min-h-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={barData}>
                     <XAxis dataKey="name" stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} />
@@ -637,13 +649,13 @@ const Dashboard = ({ user }) => {
               </div>
             </div>
             
-            <div className="glass-panel p-5 border border-white/10 h-72 flex flex-col">
+            <div className="glass-panel p-5 h-72 flex flex-col">
               <h3 className="text-sm font-semibold text-slate-300 mb-4">Incident Distribution</h3>
-              <div className="h-[200px] w-full relative">
+              <div className="h-[200px] w-full min-w-0 relative">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={pieData}
+                      data={hasPieData ? visiblePieData : [{ name: 'No incidents', value: 1, color: 'rgba(255,255,255,0.12)' }]}
                       cx="50%"
                       cy="50%"
                       innerRadius={60}
@@ -652,7 +664,7 @@ const Dashboard = ({ user }) => {
                       dataKey="value"
                       stroke="none"
                     >
-                      {pieData.map((entry, index) => (
+                      {(hasPieData ? visiblePieData : [{ color: 'rgba(255,255,255,0.12)' }]).map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -661,7 +673,7 @@ const Dashboard = ({ user }) => {
                 </ResponsiveContainer>
                 {/* Custom Legend */}
                 <div className="absolute top-0 right-0 flex flex-col gap-2">
-                  {pieData.map((item, idx) => (
+                  {(hasPieData ? visiblePieData : [{ name: 'No incidents yet', value: 0, color: 'rgba(255,255,255,0.22)' }]).map((item, idx) => (
                     <div key={idx} className="flex items-center gap-2 text-xs text-slate-400">
                       <div className="w-3 h-3 rounded-full" style={{backgroundColor: item.color}}></div>
                       {item.name}
@@ -678,23 +690,23 @@ const Dashboard = ({ user }) => {
         <div className={`space-y-6 flex flex-col ${isLogExpanded ? 'xl:col-span-3 h-auto' : 'h-[calc(100vh-140px)]'}`}>
           
           {/* Incident Log Timeline */}
-          <div className="glass-panel flex-1 border border-white/10 flex flex-col overflow-hidden">
-            <div className="bg-navy-950 p-4 border-b border-white/5 flex justify-between items-center">
+          <div className="glass-panel dashboard-log-panel flex-1 flex flex-col overflow-hidden">
+            <div className="dashboard-panel-header compact">
               <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
                 <Record className="text-teal-400" /> Incident Log
               </h3>
-              <div className="flex items-center gap-2">
+              <div className="dashboard-log-controls">
                 <button 
                   onClick={() => setIsLogExpanded(!isLogExpanded)} 
-                  className="text-xs bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-lg border border-white/10 text-slate-300 flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="dashboard-log-button"
                 >
                   {isLogExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
                   {isLogExpanded ? 'Collapse Log' : 'Expand Log'}
                 </button>
-                <span className="text-xs bg-teal-500/10 text-teal-400 px-2 py-1 rounded-full">Live</span>
+                <span className="dashboard-live-pill">Live</span>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <div className="dashboard-log-scroll flex-1 overflow-y-auto p-4 custom-scrollbar">
               {logsLoading ? (
                 <div className="text-center text-slate-500 py-10">Loading logs...</div>
               ) : logs.length === 0 ? (
@@ -717,8 +729,8 @@ const Dashboard = ({ user }) => {
 
           {/* Leads Panel */}
           {!isLogExpanded && (
-            <div className="glass-panel h-64 border border-white/10 flex flex-col">
-              <div className="bg-navy-950 p-4 border-b border-white/5 flex justify-between items-center">
+            <div className="glass-panel h-64 flex flex-col">
+              <div className="dashboard-panel-header compact">
                 <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
                   <Users className="text-teal-400" /> Registered Leads
                 </h3>

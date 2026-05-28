@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { List, X, ShieldCheck } from '@phosphor-icons/react';
 
 const Navbar = ({ user, onLogout }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => setIsOpen(false), [location]);
 
   const links = [
     { name: 'Home', path: '/' },
@@ -17,126 +26,249 @@ const Navbar = ({ user, onLogout }) => {
   const isActive = (path) => location.pathname === path;
 
   return (
-    <nav className="sticky top-0 z-40 glass-panel border-x-0 border-t-0 rounded-none bg-panel">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-20">
-          <div className="flex items-center">
-            <Link to="/" className="flex items-center gap-2">
-              <ShieldCheck size={32} weight="fill" className="text-teal-400" />
-              <span className="text-xl font-bold text-white tracking-tight">FallingDown AI</span>
-            </Link>
-          </div>
-          <div className="hidden md:block">
-            <div className="ml-10 flex items-baseline space-x-8">
-              {links.map((link) => (
-                <Link
-                  key={link.name}
-                  to={link.path}
-                  className={`${
-                    isActive(link.path)
-                      ? 'text-teal-400'
-                      : 'text-slate-300 hover:text-white hover:bg-white/5'
-                  } px-3 py-2 rounded-md text-sm font-medium transition-colors`}
-                >
-                  {link.name}
-                </Link>
-              ))}
-              {user ? (
-                <div className="flex items-center gap-4 ml-4">
-                  <Link to="/dashboard" className="btn-outline px-4 py-2">
-                    Live Dashboard
-                  </Link>
-                  <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-xl">
-                    <div className="w-8 h-8 rounded-full bg-teal-500/20 text-teal-400 font-bold flex items-center justify-center text-sm shadow-[0_0_8px_rgba(45,212,191,0.15)]">
-                      {user.name[0].toUpperCase()}
-                    </div>
-                    <div className="text-left leading-tight hidden lg:block">
-                      <div className="text-xs font-bold text-white max-w-[80px] truncate">{user.name}</div>
-                      <div className="text-[10px] font-semibold text-slate-500 uppercase">{user.role}</div>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={onLogout}
-                    className="text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 px-3 py-2 rounded-xl transition-all cursor-pointer font-bold"
-                  >
-                    Logout
-                  </button>
-                </div>
-              ) : (
-                <Link to="/login" className="btn-primary px-5 py-2.5 ml-4">
-                  Sign In
-                </Link>
-              )}
+    <nav
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 50,
+        background: scrolled ? 'rgba(5,5,7,0.85)' : 'transparent',
+        backdropFilter: scrolled ? 'blur(24px) saturate(180%)' : 'none',
+        WebkitBackdropFilter: scrolled ? 'blur(24px) saturate(180%)' : 'none',
+        borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : '1px solid transparent',
+        transition: 'all 0.4s cubic-bezier(0.4,0,0.2,1)',
+      }}
+    >
+      <div className="container">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '68px' }}>
+          {/* Logo */}
+          <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}>
+            <div style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '9px',
+              background: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L3 7v5c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5z" fill="#000" />
+                <path d="M9 12l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </div>
-          </div>
-          <div className="-mr-2 flex md:hidden">
-            <button
-              onClick={() => setIsOpen(!isOpen)}
-              className="inline-flex items-center justify-center p-2 rounded-md text-slate-400 hover:text-white hover:bg-white/5 focus:outline-none"
-            >
-              {isOpen ? <X size={24} /> : <List size={24} />}
-            </button>
-          </div>
-        </div>
-      </div>
+            <span style={{ fontWeight: 700, fontSize: '1.0625rem', color: 'white', letterSpacing: '-0.02em' }}>
+              FallingDown AI
+            </span>
+          </Link>
 
-      {isOpen && (
-        <div className="md:hidden glass-panel border-x-0 border-t-0 rounded-none bg-navy-900/95 absolute w-full left-0">
-          <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+          {/* Desktop nav links */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }} className="hidden-mobile">
             {links.map((link) => (
               <Link
                 key={link.name}
                 to={link.path}
-                onClick={() => setIsOpen(false)}
-                className={`${
-                  isActive(link.path)
-                    ? 'bg-white/10 text-teal-400'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5'
-                } block px-3 py-2 rounded-md text-base font-medium`}
+                style={{
+                  padding: '0.5rem 0.875rem',
+                  borderRadius: '980px',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  letterSpacing: '-0.01em',
+                  color: isActive(link.path) ? 'white' : 'rgba(255,255,255,0.55)',
+                  background: isActive(link.path) ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  textDecoration: 'none',
+                  transition: 'all 0.2s ease',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={e => {
+                  if (!isActive(link.path)) {
+                    e.target.style.color = 'rgba(255,255,255,0.85)';
+                    e.target.style.background = 'rgba(255,255,255,0.05)';
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isActive(link.path)) {
+                    e.target.style.color = 'rgba(255,255,255,0.55)';
+                    e.target.style.background = 'transparent';
+                  }
+                }}
               >
                 {link.name}
               </Link>
             ))}
+          </div>
+
+          {/* Desktop auth */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} className="hidden-mobile">
             {user ? (
-              <div className="space-y-2 mt-4 pt-4 border-t border-white/5">
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <div className="w-10 h-10 rounded-full bg-teal-500/20 text-teal-400 font-bold flex items-center justify-center text-sm">
-                    {user.name[0].toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold text-white">{user.name}</div>
-                    <div className="text-xs font-semibold text-slate-500 uppercase">{user.role}</div>
-                  </div>
-                </div>
-                <Link
-                  to="/dashboard"
-                  onClick={() => setIsOpen(false)}
-                  className="block w-full text-center btn-outline py-2.5 rounded-xl"
-                >
+              <>
+                <Link to="/dashboard" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
                   Live Dashboard
                 </Link>
-                <button
-                  onClick={() => {
-                    setIsOpen(false);
-                    onLogout();
-                  }}
-                  className="block w-full text-center bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 py-2.5 rounded-xl font-bold cursor-pointer transition-all"
-                >
-                  Logout
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.375rem 0.875rem',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '980px',
+                }}>
+                  <div style={{
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '50%',
+                    background: 'rgba(79,142,247,0.2)',
+                    border: '1px solid rgba(79,142,247,0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: '#93c5fd',
+                  }}>
+                    {user.name?.[0]?.toUpperCase() || 'U'}
+                  </div>
+                  <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'rgba(255,255,255,0.75)', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {user.name}
+                  </span>
+                </div>
+                <button onClick={onLogout} className="btn btn-danger btn-sm">
+                  Sign out
                 </button>
-              </div>
+              </>
             ) : (
-              <Link
-                to="/login"
-                onClick={() => setIsOpen(false)}
-                className="block w-full text-center mt-4 btn-primary py-2.5 rounded-xl"
-              >
-                Sign In
-              </Link>
+              <>
+                <Link to="/login" style={{
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: 'rgba(255,255,255,0.55)',
+                  textDecoration: 'none',
+                  padding: '0.5rem 0.875rem',
+                  transition: 'color 0.2s',
+                }}
+                  onMouseEnter={e => e.target.style.color = 'white'}
+                  onMouseLeave={e => e.target.style.color = 'rgba(255,255,255,0.55)'}
+                >
+                  Sign in
+                </Link>
+                <Link to="/login" className="btn btn-primary btn-sm" style={{ textDecoration: 'none' }}>
+                  Get started
+                </Link>
+              </>
+            )}
+          </div>
+
+          {/* Mobile hamburger */}
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className="show-mobile"
+            style={{
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '10px',
+              width: '40px',
+              height: '40px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '4.5px',
+              cursor: 'pointer',
+              padding: 0,
+              transition: 'all 0.2s',
+            }}
+            aria-label="Toggle menu"
+          >
+            <span style={{
+              display: 'block', width: '16px', height: '1.5px', background: 'rgba(255,255,255,0.75)', borderRadius: '2px',
+              transition: 'all 0.25s',
+              transform: isOpen ? 'translateY(6px) rotate(45deg)' : 'none',
+            }} />
+            <span style={{
+              display: 'block', width: '16px', height: '1.5px', background: 'rgba(255,255,255,0.75)', borderRadius: '2px',
+              transition: 'all 0.25s',
+              opacity: isOpen ? 0 : 1,
+            }} />
+            <span style={{
+              display: 'block', width: '16px', height: '1.5px', background: 'rgba(255,255,255,0.75)', borderRadius: '2px',
+              transition: 'all 0.25s',
+              transform: isOpen ? 'translateY(-6px) rotate(-45deg)' : 'none',
+            }} />
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile menu */}
+      {isOpen && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          right: 0,
+          background: 'rgba(5,5,7,0.98)',
+          backdropFilter: 'blur(40px)',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          padding: '1rem 1.5rem 1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.125rem',
+          animation: 'fade-up 0.15s ease',
+        }}>
+          {links.map((link) => (
+            <Link
+              key={link.name}
+              to={link.path}
+              style={{
+                display: 'block',
+                padding: '0.75rem 1rem',
+                borderRadius: '12px',
+                fontSize: '0.9375rem',
+                fontWeight: 500,
+                color: isActive(link.path) ? 'white' : 'rgba(255,255,255,0.6)',
+                background: isActive(link.path) ? 'rgba(255,255,255,0.06)' : 'transparent',
+                textDecoration: 'none',
+                transition: 'all 0.15s',
+              }}
+            >
+              {link.name}
+            </Link>
+          ))}
+
+          <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {user ? (
+              <>
+                <Link to="/dashboard" className="btn btn-secondary" style={{ textDecoration: 'none', width: '100%' }}>
+                  Live Dashboard
+                </Link>
+                <button onClick={onLogout} className="btn btn-danger" style={{ width: '100%' }}>
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <>
+                <Link to="/login" className="btn btn-secondary" style={{ textDecoration: 'none', width: '100%' }}>
+                  Sign in
+                </Link>
+                <Link to="/login" className="btn btn-primary" style={{ textDecoration: 'none', width: '100%' }}>
+                  Get started free
+                </Link>
+              </>
             )}
           </div>
         </div>
       )}
+
+      <style>{`
+        @media (min-width: 768px) {
+          .hidden-mobile { display: flex !important; }
+          .show-mobile { display: none !important; }
+        }
+        @media (max-width: 767px) {
+          .hidden-mobile { display: none !important; }
+          .show-mobile { display: flex !important; }
+        }
+      `}</style>
     </nav>
   );
 };

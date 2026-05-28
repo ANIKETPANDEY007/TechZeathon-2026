@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Clock, MapPin, WarningCircle, Trash, X } from '@phosphor-icons/react';
+import { Clock, MapPin, WarningCircle, Trash, X, ImageSquare, MagnifyingGlassPlus, DownloadSimple } from '@phosphor-icons/react';
 import AlertBadge from './AlertBadge';
 import { getImageUrl, deleteIncidentImage, deleteIncident } from '../api/fallingdown';
 import { format } from 'date-fns';
@@ -54,11 +54,11 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
   const formattedTime = parsedDate ? format(parsedDate, 'HH:mm:ss') : 'Unknown Time';
   const formattedDate = parsedDate ? format(parsedDate, 'MMM dd, yyyy') : '';
 
-  const getBorderColor = () => {
-    if (movement_status === 'fall_detected' || is_critical) return 'border-red-500/50 pulse-border-red';
-    if (movement_status === 'moderate_fall') return 'border-orange-500/50';
-    if (movement_status === 'audio_only') return 'border-purple-500/50';
-    return 'border-white/10';
+  const getTone = () => {
+    if (movement_status === 'fall_detected' || is_critical) return 'critical';
+    if (movement_status === 'moderate_fall') return 'warning';
+    if (movement_status === 'audio_only') return 'audio';
+    return 'normal';
   };
 
   const displayStatus = movement_status === 'fall_detected' ? 'CRITICAL' 
@@ -66,57 +66,66 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
                       : movement_status === 'audio_only' ? 'AUDIO DISTRESS'
                       : 'NORMAL';
 
+  const tone = getTone();
+
   return (
-    <div className={`glass-panel p-4 flex flex-col gap-3 transition-all ${getBorderColor()}`}>
-      <div className="flex justify-between items-start">
-        <AlertBadge status={displayStatus} />
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <div className="text-sm font-mono text-slate-300 flex items-center gap-1 justify-end">
-              <Clock size={14} /> {formattedTime}
-            </div>
-            <div className="text-xs text-slate-500">{formattedDate}</div>
+    <div className={`incident-card ${tone}`}>
+      <div className="incident-card-top">
+        <div>
+          <AlertBadge status={displayStatus} />
+          <div className="incident-location">
+            <MapPin size={16} />
+            <span>{location || 'Unknown Location'}</span>
           </div>
+        </div>
+
+        <div className="incident-meta">
+          <div className="incident-time">
+            <Clock size={15} /> {formattedTime}
+          </div>
+          <div className="incident-date">{formattedDate}</div>
           <button
             onClick={handleDeleteIncident}
-            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/30 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition-all cursor-pointer self-start"
-            title="Delete Incident Log"
+            className="icon-action danger"
+            title="Delete incident log"
+            aria-label="Delete incident log"
           >
-            <Trash size={15} />
+            <Trash size={16} />
           </button>
         </div>
       </div>
-      
-      <div className="flex items-center gap-2 text-sm text-slate-400 mt-2">
-        <MapPin size={16} className="text-teal-400" />
-        {location || 'Unknown Location'}
-      </div>
-      
+
       {image_filename && !imageDeleted && (
-        <div className="mt-2 rounded-lg overflow-hidden border border-white/5 cursor-pointer relative group" onClick={() => setIsModalOpen(true)}>
+        <div className="incident-snapshot group" onClick={() => setIsModalOpen(true)}>
           {hasError ? (
-            <div className="h-24 bg-white/5 flex items-center justify-center text-xs text-slate-500 gap-2">
+            <div className="incident-image-fallback">
               <WarningCircle size={16} className="text-orange-400" />
               <span>Image loading...</span>
             </div>
           ) : (
             <>
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                <span className="text-white text-xs bg-black/60 px-2 py-1 rounded">
-                  Click to view full image
+              <div className="incident-snapshot-overlay">
+                <span>
+                  <MagnifyingGlassPlus size={15} />
+                  View snapshot
                 </span>
+              </div>
+              <div className="incident-image-label">
+                <ImageSquare size={14} />
+                Evidence
               </div>
               <button
                 onClick={handleDeleteImage}
-                className="absolute top-2 right-2 p-1.5 rounded-lg bg-red-500/80 hover:bg-red-600 text-white opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-pointer shadow-md"
-                title="Delete Image"
+                className="icon-action danger floating"
+                title="Delete image"
+                aria-label="Delete image"
               >
                 <Trash size={14} weight="bold" />
               </button>
               <img 
                 src={getImageUrl(image_filename)} 
                 alt="Incident snapshot" 
-                className="w-full h-24 object-cover hover:scale-105 transition-transform duration-300"
+                className="incident-image"
                 onError={() => setHasError(true)}
               />
             </>
@@ -131,11 +140,11 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
           onClick={() => setIsModalOpen(false)}
         >
           <div 
-            className="relative max-w-4xl w-full bg-navy-950/95 border border-white/10 rounded-2xl overflow-hidden shadow-2xl cursor-default flex flex-col sm:flex-row"
+            className="incident-modal"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Image Section */}
-            <div className="flex-1 bg-black flex items-center justify-center min-h-[300px]">
+            <div className="incident-modal-image">
               <img 
                 src={getImageUrl(image_filename)} 
                 alt="Expanded incident snapshot" 
@@ -144,13 +153,14 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
             </div>
             
             {/* Info Sidebar Section */}
-            <div className="w-full sm:w-80 bg-navy-900/80 border-t sm:border-t-0 sm:border-l border-white/10 p-6 flex flex-col justify-between">
+            <div className="incident-modal-side">
               <div>
                 <div className="flex justify-between items-start mb-6">
                   <AlertBadge status={displayStatus} />
                   <button 
                     onClick={() => setIsModalOpen(false)}
-                    className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                    className="icon-action"
+                    aria-label="Close snapshot"
                   >
                     <X size={20} weight="bold" />
                   </button>
@@ -180,7 +190,7 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
               <div className="mt-8 pt-6 border-t border-white/5 flex gap-3">
                 <button 
                   onClick={handleDeleteIncident}
-                  className="flex-1 py-2.5 px-4 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="incident-modal-button danger"
                   title="Delete entire incident log"
                 >
                   <Trash size={14} /> Delete Log
@@ -190,9 +200,9 @@ const IncidentCard = ({ id, timestamp, movement_status, location, image_filename
                   download={`incident_${id}.jpg`}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex-1 py-2.5 px-4 bg-teal-400 hover:bg-teal-500 text-navy-950 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                  className="incident-modal-button primary"
                 >
-                  Download
+                  <DownloadSimple size={14} /> Download
                 </a>
               </div>
             </div>
