@@ -3,6 +3,7 @@ FallingDown AI — pose_detector.py
 MediaPipe Tasks API (v0.10+) — skeleton-based fall detection
 """
 import cv2
+import mediapipe as mp
 import numpy as np
 import requests
 import time
@@ -11,7 +12,10 @@ import sys
 import json
 import signal
 import threading
+import speech_recognition as sr
 from datetime import datetime
+from collections import deque
+import math
 
 # MediaPipe Tasks API (works with mediapipe >=0.10)
 import mediapipe as mp
@@ -32,15 +36,14 @@ def load_config():
 
 CONFIG = load_config()
 
-API_BASE           = CONFIG.get('api_base',            'http://localhost:5000')
-API_KEY            = CONFIG.get('api_key',             '')
-CAMERA_INDEX       = CONFIG.get('camera_index',        0)
-CAMERA_LOCATION    = CONFIG.get('camera_location',     'Camera 01')
-ALERT_COOLDOWN     = CONFIG.get('alert_cooldown_seconds', 30)
-AUDIO_ENABLED      = CONFIG.get('audio_enabled',       True)
-DISTRESS_KEYWORDS  = CONFIG.get('distress_keywords', [
-    "help me", "help", "emergency", "fall", "save me", "ouch", "i fell"
-])
+# Read configurations
+API_BASE = CONFIG.get('api_base', 'http://localhost:5000')
+API_KEY = CONFIG.get('api_key', '')
+CAMERA_INDEX = CONFIG.get('camera_index', 0)
+CAMERA_LOCATION = CONFIG.get('camera_location', 'Camera 01')
+FALL_FRAME_THRESHOLD = CONFIG.get('fall_frame_threshold', 5)  
+ALERT_COOLDOWN_SECONDS = CONFIG.get('alert_cooldown_seconds', 5)
+AUDIO_ENABLED = CONFIG.get('audio_enabled', True)
 
 # ── Fall detection thresholds ────────────────────────────────────────────────
 # Spine angle from vertical (shoulder→hip line).
@@ -72,6 +75,14 @@ last_alert_time = 0
 audio_listening = True
 cap             = None
 
+
+# Voice alerts rolling window
+distress_timestamps = deque()
+voice_normal_active = False
+voice_critical_active = False
+
+# Lock for multi-threaded variable access
+data_lock = threading.Lock()
 
 # =========================
 # SIGNAL HANDLER
@@ -147,22 +158,26 @@ def send_incident(fall_detected, movement_status, is_critical, location, frame=N
     if frame is not None:
         fname = f"incident_{int(time.time())}.jpg"
         os.makedirs("uploads", exist_ok=True)
-        cv2.imwrite(os.path.join("uploads", fname), frame)
-        image_filename = fname
-        print(f"📸 Snapshot saved: {fname}")
+        cv2.imwrite(temp_path, frame)
+        image_filename = filename
+        print(f"📸 Snapshot captured and saved locally as: {filename}")
 
-    headers = {"Content-Type": "application/json"}
+    payload = {
+        "fall": fall_detected,
+        "movement": movement_status,
+        "critical": is_critical,
+        "location": location,
+        "image_filename": image_filename
+    }
+
+    headers = {'Content-Type': 'application/json'}
     if API_KEY:
         headers["X-API-Key"] = API_KEY
 
     try:
-        res = requests.post(
-            f"{API_BASE}/api/v1/incident",
-            json={"fall": fall_detected, "movement": movement_status,
-                  "critical": is_critical, "location": location,
-                  "image_filename": image_filename},
-            headers=headers, timeout=10
-        )
+        url = f"{API_BASE}/api/v1/incident" # Change this endpoint if your Flask backend uses /api/incident instead
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        
         if res.status_code == 201:
             print(f"🚨 Incident logged: {movement_status.upper()}")
             alert_triggered = True
@@ -176,12 +191,8 @@ def send_incident(fall_detected, movement_status, is_critical, location, frame=N
 # AUDIO DISTRESS
 # =========================
 def audio_listener():
-    global audio_listening
-    try:
-        import speech_recognition as sr
-    except ImportError:
-        print("❌ speech_recognition not installed — audio disabled.")
-        return
+    global audio_listening, distress_timestamps, voice_normal_active, voice_critical_active
+    
     r = sr.Recognizer()
     try:
         mic = sr.Microphone()
@@ -189,23 +200,68 @@ def audio_listener():
         print(f"❌ Mic error: {ex}")
         return
 
-    print("🎙️  Audio listener active.")
+    print("🎙️ Audio distress listener started. Calibrating...")
+    with mic as source:
+        r.adjust_for_ambient_noise(source, duration=2)
+    print("✅ Privacy Mode Active: Monitoring for distress keywords (e.g., 'help', 'help me')...")
+
+    voice_keywords = ["help", "help me", "i fell", "fallen", "emergency", "save me", "can't get up"]
+
     while audio_listening:
         try:
-            with mic as src:
-                r.adjust_for_ambient_noise(src, duration=1)
-                audio = r.listen(src, phrase_time_limit=3)
+            with mic as source:
+                audio = r.listen(source, timeout=5, phrase_time_limit=5)
+            
             text = r.recognize_google(audio).lower()
-            print(f"🎙️  Heard: '{text}'")
-            if any(kw in text for kw in DISTRESS_KEYWORDS):
-                print("🚨 Distress keyword!")
-                send_incident(False, "audio_only", True,
-                              f"{CAMERA_LOCATION} (Voice Distress)")
+            print(f"👂 Heard: '{text}'")
+
+            if any(kw in text for kw in voice_keywords):
+                now = time.time()
+                with data_lock:
+                    distress_timestamps.append(now)
+                    
+                    # Clean up timestamps older than 60 seconds
+                    while distress_timestamps and distress_timestamps[0] < now - 60:
+                        distress_timestamps.popleft()
+                    
+                    count = len(distress_timestamps)
+                    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"🎙️ Distress keyword heard! Time: {timestamp_str}, Current count: {count}")
+                    
+                    if count == 1:
+                        print("🎙️ Heard distress once - monitoring for confirmation...")
+                    
+                    # 2 TIMES HELP = NORMAL FALL
+                    elif count == 2:
+                        print("🔔 AUDIO ALERT: Normal Fall Detected (Heard Help 2 times)")
+                        voice_normal_active = True
+                        send_incident(
+                            fall_detected=True,
+                            movement_status="normal_fall_audio",
+                            is_critical=False,
+                            location=f"{CAMERA_LOCATION} (Audio Zone)"
+                        )
+                    
+                    # 3 TIMES HELP = CRITICAL FALL
+                    elif count >= 3:
+                        print("🚨 AUDIO ALERT: Critical Fall Detected! (Heard Help 3+ times)")
+                        voice_critical_active = True
+                        send_incident(
+                            fall_detected=True,
+                            movement_status="critical_fall_audio",
+                            is_critical=True,
+                            location=f"{CAMERA_LOCATION} (Audio Zone)"
+                        )
+                        distress_timestamps.clear()
+                        
+        except sr.WaitTimeoutError:
+            pass 
         except sr.UnknownValueError:
             pass
         except Exception as e:
             if audio_listening:
-                time.sleep(1)
+                print(f"⚠️ Audio listener exception: {e}")
+                time.sleep(2)
 
 
 # =========================
@@ -213,9 +269,11 @@ def audio_listener():
 # =========================
 def wait_for_backend():
     attempts = CONFIG.get('reconnect_attempts', 5)
-    delay    = CONFIG.get('reconnect_delay_seconds', 3)
-    print(f"📡 Connecting to {API_BASE} …")
-    for i in range(1, attempts + 1):
+    delay = CONFIG.get('reconnect_delay_seconds', 3)
+    
+    print(f"📡 Testing connection to Flask backend...")
+    
+    for attempt in range(1, attempts + 1):
         try:
             r = requests.get(f"{API_BASE}/api/v1/status", timeout=3)
             if r.status_code == 200:
@@ -262,15 +320,8 @@ def draw_skeleton(disp, landmarks, img_w, img_h, color=(0, 220, 50)):
 # MAIN
 # =========================
 def main():
-    global cap, alert_triggered
-
-    # Check model file
-    if not os.path.exists(MODEL_PATH):
-        print(f"❌ Model file '{MODEL_PATH}' not found.")
-        print("   Run this to download it:")
-        print("   curl -L https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task -o pose_landmarker.task")
-        sys.exit(1)
-
+    global cap, alert_triggered, voice_normal_active, voice_critical_active, distress_timestamps
+    
     wait_for_backend()
 
     if AUDIO_ENABLED:
@@ -281,31 +332,25 @@ def main():
         print(f"❌ Cannot open camera {CAMERA_INDEX}")
         return
 
-    # ── Build MediaPipe Tasks PoseLandmarker ──────────────────────────────
-    base_opts = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
-    pose_opts = mp_vision.PoseLandmarkerOptions(
-        base_options=base_opts,
-        running_mode=mp_vision.RunningMode.IMAGE,   # per-frame (static) mode
-        num_poses=1,
-        min_pose_detection_confidence=0.55,
-        min_pose_presence_confidence=0.55,
-        min_tracking_confidence=0.55,
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
     )
-    landmarker = mp_vision.PoseLandmarker.create_from_options(pose_opts)
 
-    print("\n" + "=" * 55)
-    print("🚀 FallingDown AI  —  MediaPipe Tasks Fall Detector")
-    print(f"   Spine angle threshold  : ≥ {SPINE_ANGLE_THRESHOLD}° from vertical")
-    print(f"   Head / hip ratio guard : ≥ {HEAD_BELOW_HIP_RATIO}")
-    print(f"   Consecutive frames     : {FALL_FRAME_THRESHOLD}")
-    print(f"   Model                  : {MODEL_PATH}")
-    print("=" * 55)
-    print("  f → force fall   a → audio alert   r → reset   q → quit")
-    print("=" * 55 + "\n")
+    print("\n=============================================")
+    print("🚀 FallingDown AI - Active Guardian Mode")
+    print("=============================================")
+    print("Keyboard bindings on feed screen:")
+    print("  'f' : Force trigger Fall incident")
+    print("  'a' : Force trigger Audio distress incident")
+    print("  'r' : Reset alert status to SAFE")
+    print("  'q' : Quit client")
+    print("=============================================\n")
 
+    hip_y_history = deque(maxlen=5)
     consecutive_fall_frames = 0
-    angle_history            = []
-    SMOOTH_LEN               = 5
+    prev_frame_time = time.time()
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -314,102 +359,152 @@ def main():
             break
 
         frame = cv2.flip(frame, 1)
-        h, w  = frame.shape[:2]
-        disp  = frame.copy()
+        display_frame = frame.copy()
+        h, w, _ = frame.shape
 
-        # ── Run MediaPipe ─────────────────────────────────────────────────
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB,
-                            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        result   = landmarker.detect(mp_image)
+        current_time = time.time()
+        time_elapsed = current_time - prev_frame_time
+        fps = 1.0 / time_elapsed if time_elapsed > 0 else 0.0
+        prev_frame_time = current_time
 
-        fall_this_frame = False
-        spine_angle     = 0.0
-        smoothed_angle  = 0.0
-        hbh_ratio       = 0.0
+        with data_lock:
+            while distress_timestamps and distress_timestamps[0] < current_time - 60:
+                distress_timestamps.popleft()
+            voice_alert_count = len(distress_timestamps)
 
-        if result.pose_landmarks:
-            landmarks = result.pose_landmarks[0]   # first person
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(rgb_frame)
 
-            # Draw skeleton
-            spine_color = (0, 0, 255) if fall_this_frame else \
-                          (0, 140, 255) if smoothed_angle >= SPINE_ANGLE_THRESHOLD else \
-                          (0, 220, 50)
-            draw_skeleton(disp, landmarks, w, h, color=spine_color)
+        person_detected = False
+        trunk_angle = 0.0
+        aspect_ratio = 0.0
+        vertical_drop_speed = 0.0
 
-            # Compute spine angle + head/hip ratio
-            info = spine_angle_from_vertical(landmarks, w, h)
-            if info is not None:
-                spine_angle, hbh_ratio, shoulder_px, hip_px, nose_px = info
+        cond_a = False  
+        cond_b = False  
+        cond_c = False  
 
-                # Smooth angle
-                angle_history.append(spine_angle)
-                if len(angle_history) > SMOOTH_LEN:
-                    angle_history.pop(0)
-                smoothed_angle = np.mean(angle_history)
+        bbox_x1, bbox_y1, bbox_x2, bbox_y2 = 0, 0, 0, 0
 
-                # Draw spine line (coloured by severity)
-                s_col = (0, 0, 255)   if smoothed_angle >= SPINE_ANGLE_THRESHOLD else \
-                        (0, 220, 50)
-                cv2.line(disp, shoulder_px, hip_px, s_col, 4)
-                cv2.circle(disp, shoulder_px, 7, (255, 200, 0), -1)
-                cv2.circle(disp, hip_px,      7, (255, 200, 0), -1)
-                cv2.circle(disp, nose_px,     5, (255, 100, 100), -1)
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+            
+            l_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+            r_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+            l_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
+            r_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value]
 
-                # ── Fall logic ───────────────────────────────────────────
-                angle_ok = smoothed_angle >= SPINE_ANGLE_THRESHOLD
-                head_ok  = hbh_ratio      >= HEAD_BELOW_HIP_RATIO
+            shoulder_mid_x = ((l_shoulder.x + r_shoulder.x) / 2.0) * w
+            shoulder_mid_y = ((l_shoulder.y + r_shoulder.y) / 2.0) * h
+            hip_mid_x = ((l_hip.x + r_hip.x) / 2.0) * w
+            hip_mid_y = ((l_hip.y + r_hip.y) / 2.0) * h
 
-                if angle_ok and head_ok:
-                    consecutive_fall_frames += 1
-                elif angle_ok:
-                    # Tilt alone — climb slower, never reach threshold solo
-                    consecutive_fall_frames = min(
-                        consecutive_fall_frames + 1,
-                        FALL_FRAME_THRESHOLD - 1
-                    )
-                else:
-                    consecutive_fall_frames = max(0, consecutive_fall_frames - 3)
-                    if consecutive_fall_frames == 0:
-                        angle_history.clear()
+            dx = shoulder_mid_x - hip_mid_x
+            dy = shoulder_mid_y - hip_mid_y
+            
+            trunk_angle = math.degrees(math.atan2(abs(dx), abs(dy)))
+            if trunk_angle > 50.0:
+                cond_a = True
 
-                if consecutive_fall_frames >= FALL_FRAME_THRESHOLD:
-                    fall_this_frame = True
+            visible_x = []
+            visible_y = []
+            for lm in landmarks:
+                if lm.visibility > 0.5:
+                    visible_x.append(lm.x * w)
+                    visible_y.append(lm.y * h)
 
-                # ── Info overlay ─────────────────────────────────────────
-                ox, oy = shoulder_px[0] + 12, shoulder_px[1] - 12
-                cv2.putText(disp, f"Spine: {smoothed_angle:.1f}° (≥{SPINE_ANGLE_THRESHOLD}°)",
-                            (ox, oy),      cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 255), 1)
-                cv2.putText(disp, f"H/Hip: {hbh_ratio:.2f} (≥{HEAD_BELOW_HIP_RATIO})",
-                            (ox, oy + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (220, 220, 255), 1)
-                cv2.putText(disp, f"Frames: {consecutive_fall_frames}/{FALL_FRAME_THRESHOLD}",
-                            (ox, oy + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (220, 220, 255), 1)
+            if visible_x:
+                person_detected = True
+                x_min, x_max = min(visible_x), max(visible_x)
+                y_min, y_max = min(visible_y), max(visible_y)
+                
+                bbox_x1 = int(max(0, x_min))
+                bbox_y1 = int(max(0, y_min))
+                bbox_x2 = int(min(w, x_max))
+                bbox_y2 = int(min(h, y_max))
+
+                bw = bbox_x2 - bbox_x1
+                bh = bbox_y2 - bbox_y1
+                aspect_ratio = bw / (bh if bh > 0 else 1)
+                
+                if aspect_ratio > 1.2:
+                    cond_b = True
+
+            hip_y_history.append(hip_mid_y)
+            if len(hip_y_history) >= 4:
+                vertical_drop_speed = hip_y_history[-1] - hip_y_history[-4]
+                if vertical_drop_speed > 80.0:
+                    cond_c = True
+
+        fall_confirmed_this_frame = False
+        if person_detected:
+            conditions_met = sum([cond_a, cond_b, cond_c]) >= 2
+            if conditions_met:
+                consecutive_fall_frames += 1
             else:
-                consecutive_fall_frames = max(0, consecutive_fall_frames - 1)
+                consecutive_fall_frames = 0
+            
+            if consecutive_fall_frames >= FALL_FRAME_THRESHOLD:
+                fall_confirmed_this_frame = True
         else:
-            consecutive_fall_frames = max(0, consecutive_fall_frames - 1)
+            consecutive_fall_frames = 0
 
-        # ── Fire alert ────────────────────────────────────────────────────
-        if fall_this_frame:
+        if fall_confirmed_this_frame:
             status_label = "FALL DETECTED!"
             status_color = (0, 0, 255)
-            send_incident(True, "fall_detected", True, CAMERA_LOCATION, frame=frame)
+            send_incident(
+                fall_detected=True,
+                movement_status="fall_detected",
+                is_critical=True,
+                location=CAMERA_LOCATION,
+                frame=frame
+            )
+        elif voice_critical_active:
+            status_label = "AUDIO CRITICAL FALL"
+            status_color = (0, 0, 255) 
+        elif voice_normal_active:
+            status_label = "AUDIO NORMAL FALL"
+            status_color = (0, 165, 255) 
         elif alert_triggered:
-            status_label = "ALERT ACTIVE"
-            status_color = (0, 140, 255)
+            status_label = "FALL DETECTED!"
+            status_color = (0, 0, 255)
         else:
             status_label = "SAFE"
-            status_color = (0, 220, 0)
+            status_color = (0, 255, 0) 
 
-        # ── Status bar ────────────────────────────────────────────────────
-        cv2.rectangle(disp, (0, 0), (w, 56), (0, 0, 0), -1)
-        cv2.putText(disp, f"STATUS: {status_label}",
-                    (14, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2)
-        cv2.putText(disp,
-                    f"Spine {smoothed_angle:.1f}°  H/Hip {hbh_ratio:.2f}  "
-                    f"frames {consecutive_fall_frames}/{FALL_FRAME_THRESHOLD}",
-                    (14, 53), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (150, 150, 150), 1)
+        # Border for entire frame
+        if status_label in ["FALL DETECTED!", "AUDIO CRITICAL FALL"] or fall_confirmed_this_frame:
+            cv2.rectangle(display_frame, (0, 0), (w, h), (0, 0, 255), 4)
 
-        cv2.imshow("FallingDown AI — Guardian Feed", disp)
+        if person_detected:
+            if status_label in ["FALL DETECTED!", "AUDIO CRITICAL FALL"] or fall_confirmed_this_frame:
+                # 🔴 NEW FEATURE: Draw heavy square around the fallen person
+                cv2.rectangle(display_frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), (0, 0, 255), 5) 
+                
+                # Background for the text label to make it pop
+                cv2.rectangle(display_frame, (bbox_x1, bbox_y1 - 35), (bbox_x1 + 220, bbox_y1), (0, 0, 255), -1)
+                cv2.putText(display_frame, "FALL DETECTED HERE!", (bbox_x1 + 5, bbox_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            else:
+                cv2.rectangle(display_frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), (0, 255, 0), 2)
+                cv2.putText(display_frame, "✅ SAFE", (bbox_x1, max(15, bbox_y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        else:
+            cv2.putText(display_frame, "👤 No person in frame", (20, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # Draw Status HUD Panel
+        cv2.rectangle(display_frame, (10, 10), (320, 120), (0, 0, 0), -1)
+        
+        trunk_str = f"Trunk: {trunk_angle:.1f}°" if person_detected else "Trunk: N/A"
+        ar_str = f"AR: {aspect_ratio:.2f}" if person_detected else "AR: N/A"
+        voice_str = f"Voice Alerts: {voice_alert_count}/60s"
+
+        cv2.putText(display_frame, f"STATUS: {status_label}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+        cv2.putText(display_frame, trunk_str, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(display_frame, ar_str, (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(display_frame, voice_str, (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        cv2.imshow("FallingDown AI - Live Guardian Feed", display_frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -418,14 +513,24 @@ def main():
             print("⌨️  Forced fall …")
             send_incident(True, "fall_detected", True, CAMERA_LOCATION, frame=frame)
         elif key == ord('a'):
-            print("⌨️  Forced audio distress …")
-            send_incident(False, "audio_only", True,
-                          f"{CAMERA_LOCATION} (Manual Audio Sim)")
+            print("⌨️ Forced Audio distress Simulation...")
+            send_incident(
+                fall_detected=True,
+                movement_status="critical_fall_audio",
+                is_critical=True,
+                location=f"{CAMERA_LOCATION} (Manual Audio Sim)"
+            )
+            with data_lock:
+                voice_critical_active = True
         elif key == ord('r'):
-            print("🔄  Reset → SAFE")
-            alert_triggered          = False
-            consecutive_fall_frames  = 0
-            angle_history.clear()
+            print("🔄 Resetting alert state to SAFE")
+            alert_triggered = False
+            consecutive_fall_frames = 0
+            hip_y_history.clear()
+            with data_lock:
+                distress_timestamps.clear()
+                voice_normal_active = False
+                voice_critical_active = False
 
     landmarker.close()
     cap.release()
