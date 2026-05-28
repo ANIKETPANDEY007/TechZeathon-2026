@@ -35,6 +35,7 @@ const Dashboard = ({ user }) => {
   const prevYRef = useRef(null);
   const consecutiveFallFramesRef = useRef(0);
   const lastAlertTimeRef = useRef(0);
+  const angleHistoryRef = useRef([]);       // rolling tilt-angle smoother
   const speechRecognitionRef = useRef(null);
 
   useEffect(() => {
@@ -158,6 +159,7 @@ const Dashboard = ({ user }) => {
     bgModelRef.current = null;
     prevYRef.current = null;
     consecutiveFallFramesRef.current = 0;
+    angleHistoryRef.current = [];
 
     toast.success('Live Guardian Feed Stopped.');
   };
@@ -218,183 +220,174 @@ const Dashboard = ({ user }) => {
     speechRecognitionRef.current = recognition;
   };
 
+  // ─── MediaPipe-powered live frame analysis ───────────────────────────────
+  //
+  //  Every ANALYSIS_INTERVAL milliseconds we:
+  //    1. Capture the canvas frame as a low-quality JPEG (base64)
+  //    2. POST it to Node /api/analyze-frame → Flask /api/v1/analyze-frame
+  //    3. Flask runs MediaPipe Pose and returns spine_angle, fall_risk, landmarks
+  //    4. We draw the video + skeleton overlay on the canvas
+  //    5. If fall_risk is true for FALL_FRAME_THRESHOLD consecutive checks, alert fires
+  //
+  const ANALYSIS_INTERVAL = 200;   // ms between server calls (≈5 fps analysis)
+  const FALL_FRAME_THRESHOLD_MP = 5; // 5 × 200ms = 1 second of confirmed fall
+
   const processVideoFrame = () => {
     if (!isLiveFeedActiveRef.current) return;
 
-    const video = videoRef.current;
+    const video  = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) {
       animationFrameIdRef.current = requestAnimationFrame(processVideoFrame);
       return;
     }
 
-    const ctx = canvas.getContext('2d');
+    const ctx    = canvas.getContext('2d');
     if (!ctx) {
       animationFrameIdRef.current = requestAnimationFrame(processVideoFrame);
       return;
     }
 
-    const width = canvas.width;
+    const width  = canvas.width;
     const height = canvas.height;
 
-    // Draw frame (horizontally flipped for natural mirror view)
+    // ── Draw mirrored video frame ─────────────────────────────────────────
+    ctx.save();
     ctx.translate(width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, width, height);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.restore();
 
-    // Skip video analytics if privacy mode is on
+    // ── Privacy mode: blank video, show audio waves ───────────────────────
     if (privacyMode) {
       ctx.fillStyle = '#090d16';
       ctx.fillRect(0, 0, width, height);
-
-      // Sound waves visualizer
       ctx.fillStyle = '#a855f7';
-      const waveCount = 15;
-      const barWidth = 6;
-      const spacing = 4;
+      const waveCount = 15, barWidth = 6, spacing = 4;
       const startX = (width - (waveCount * (barWidth + spacing) - spacing)) / 2;
-
       for (let i = 0; i < waveCount; i++) {
-        const time = Date.now() * 0.005 + i * 0.3;
-        const waveHeight = 15 + Math.sin(time) * 35;
-        const x = startX + i * (barWidth + spacing);
-        const y = (height - waveHeight) / 2;
-        ctx.fillRect(x, y, barWidth, waveHeight);
+        const t = Date.now() * 0.005 + i * 0.3;
+        const wh = 15 + Math.sin(t) * 35;
+        ctx.fillRect(startX + i * (barWidth + spacing), (height - wh) / 2, barWidth, wh);
       }
-
       ctx.fillStyle = '#a855f7';
       ctx.font = 'bold 12px monospace';
       ctx.textAlign = 'center';
       ctx.fillText('AUDIO SAFETY MODE ACTIVE', width / 2, height - 30);
-
       animationFrameIdRef.current = requestAnimationFrame(processVideoFrame);
       return;
     }
 
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const data = imgData.data;
+    // ── Throttle: only analyse every ANALYSIS_INTERVAL ms ────────────────
+    const now = Date.now();
+    if (!processVideoFrame._lastAnalysis) processVideoFrame._lastAnalysis = 0;
+    if (!processVideoFrame._lastResult)   processVideoFrame._lastResult   = null;
+    if (!processVideoFrame._pending)      processVideoFrame._pending      = false;
 
-    // Initialize running background model
-    if (!bgModelRef.current || bgModelRef.current.length !== data.length) {
-      bgModelRef.current = new Float32Array(data.length);
-      for (let i = 0; i < data.length; i++) {
-        bgModelRef.current[i] = data[i];
-      }
+    if ((now - processVideoFrame._lastAnalysis) >= ANALYSIS_INTERVAL && !processVideoFrame._pending) {
+      processVideoFrame._lastAnalysis = now;
+      processVideoFrame._pending      = true;
+
+      // Capture low-quality JPEG (0.5 quality) to minimise payload size
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width  = Math.min(width, 320);   // downsample to 320px wide
+      tmpCanvas.height = Math.round(height * (tmpCanvas.width / width));
+      tmpCanvas.getContext('2d').drawImage(canvas, 0, 0, tmpCanvas.width, tmpCanvas.height);
+      const frameB64 = tmpCanvas.toDataURL('image/jpeg', 0.5);
+
+      fetch('/api/analyze-frame', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ frame: frameB64 }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          processVideoFrame._lastResult = data;
+          processVideoFrame._pending    = false;
+
+          // Update fall-frame counter
+          if (data.fall_risk) {
+            consecutiveFallFramesRef.current += 1;
+          } else {
+            consecutiveFallFramesRef.current = Math.max(0, consecutiveFallFramesRef.current - 1);
+          }
+
+          // Fire alert after threshold
+          if (
+            consecutiveFallFramesRef.current >= FALL_FRAME_THRESHOLD_MP &&
+            (Date.now() - lastAlertTimeRef.current > 8000)
+          ) {
+            lastAlertTimeRef.current = Date.now();
+            handleLocalFallDetected(canvas);
+          }
+        })
+        .catch(() => { processVideoFrame._pending = false; });
     }
 
-    let diffCount = 0;
-    let minX = width;
-    let maxX = 0;
-    let minY = height;
-    let maxY = 0;
+    // ── Draw cached result overlay (runs every frame at full fps) ─────────
+    const result = processVideoFrame._lastResult;
+    const spineAngle  = result?.spine_angle    ?? 0;
+    const hbhRatio    = result?.head_hip_ratio ?? 0;
+    const fallRisk    = result?.fall_risk      ?? false;
+    const poseDetected = result?.pose_detected ?? false;
+    const lm          = result?.landmarks_px;
+    const thresholds  = result?.thresholds ?? { spine_angle: 50, head_hip_ratio: 0.85 };
 
-    const threshold = 30;
-    const alpha = 0.06;
+    // Scale landmarks back to canvas size (they were computed at 320px width)
+    const scaleX = width  / Math.min(width, 320);
+    const scaleY = height / Math.round(height * (Math.min(width, 320) / width));
 
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i+1];
-      const b = data[i+2];
+    if (poseDetected && lm) {
+      const shoulder = [lm.shoulder[0] * scaleX, lm.shoulder[1] * scaleY];
+      const hip      = [lm.hip[0]      * scaleX, lm.hip[1]      * scaleY];
+      const nose     = [lm.nose[0]     * scaleX, lm.nose[1]     * scaleY];
 
-      const bgR = bgModelRef.current[i];
-      const bgG = bgModelRef.current[i+1];
-      const bgB = bgModelRef.current[i+2];
-
-      bgModelRef.current[i] = bgR * (1 - alpha) + r * alpha;
-      bgModelRef.current[i+1] = bgG * (1 - alpha) + g * alpha;
-      bgModelRef.current[i+2] = bgB * (1 - alpha) + b * alpha;
-
-      const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
-
-      if (diff > threshold * 3) {
-        const pixelIndex = i / 4;
-        const x = pixelIndex % width;
-        const y = Math.floor(pixelIndex / width);
-
-        // Discard camera edge noise
-        if (x > 5 && x < width - 5 && y > 5 && y < height - 5) {
-          diffCount++;
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    let isFallDetectedThisFrame = false;
-    let aspectRatio = 0;
-    let speed = 0;
-
-    if (diffCount > 1000) {
-      const bw = maxX - minX;
-      const bh = maxY - minY;
-      aspectRatio = bw / (bh || 1);
-
-      if (prevYRef.current !== null) {
-        speed = minY - prevYRef.current;
-      }
-      prevYRef.current = minY;
-
-      const isHorizontal = aspectRatio > 1.2;
-      const isLowInFrame = minY > height * 0.45;
-
-      if (isHorizontal && (speed > 12 || isLowInFrame)) {
-        consecutiveFallFramesRef.current += 1;
-      } else {
-        consecutiveFallFramesRef.current = Math.max(0, consecutiveFallFramesRef.current - 1);
-      }
-
-      if (consecutiveFallFramesRef.current >= 8) {
-        isFallDetectedThisFrame = true;
-      }
-
-      // Render overlay bounding box
-      const isRedAlert = isFallDetectedThisFrame || (Date.now() - lastAlertTimeRef.current < 4000);
-      ctx.strokeStyle = isRedAlert ? '#ef4444' : '#10b981';
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(minX, minY, bw, bh);
-
-      // Centroid
-      const cx = minX + bw / 2;
-      const cy = minY + bh / 2;
-      ctx.fillStyle = '#06b6d4';
+      // Spine line
+      const spineColor = fallRisk ? '#ef4444' :
+                         spineAngle >= thresholds.spine_angle ? '#f97316' : '#10b981';
       ctx.beginPath();
-      ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
-      ctx.fill();
+      ctx.moveTo(shoulder[0], shoulder[1]);
+      ctx.lineTo(hip[0], hip[1]);
+      ctx.strokeStyle = spineColor;
+      ctx.lineWidth   = 3;
+      ctx.stroke();
 
-      // Overlays text
+      // Key-point dots
+      [shoulder, hip, nose].forEach(([px, py]) => {
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fill();
+      });
+
+      // Angle label near shoulder
       ctx.fillStyle = '#ffffff';
       ctx.font = '10px monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(`AR: ${aspectRatio.toFixed(2)}`, minX, minY > 20 ? minY - 15 : 12);
-      ctx.fillText(`Speed: ${speed > 0 ? '+' : ''}${speed}`, minX, minY > 20 ? minY - 5 : 22);
-    } else {
-      consecutiveFallFramesRef.current = Math.max(0, consecutiveFallFramesRef.current - 1);
-      prevYRef.current = null;
+      const lx = shoulder[0] + 10, ly = shoulder[1] - 8;
+      ctx.fillText(`Spine: ${spineAngle.toFixed(1)}° (≥${thresholds.spine_angle}°)`, lx, ly);
+      ctx.fillText(`Head/Hip: ${hbhRatio.toFixed(2)} (≥${thresholds.head_hip_ratio})`, lx, ly + 13);
+      ctx.fillText(`Frames: ${consecutiveFallFramesRef.current}/${FALL_FRAME_THRESHOLD_MP}`, lx, ly + 26);
     }
 
-    const isAlertActive = consecutiveFallFramesRef.current >= 8 || (Date.now() - lastAlertTimeRef.current < 4000);
-    const statusLabel = isAlertActive ? 'FALL DETECTED!' : 'SAFE';
-    const statusColor = isAlertActive ? '#ef4444' : '#10b981';
+    // ── Status bar ────────────────────────────────────────────────────────
+    const isAlertActive = consecutiveFallFramesRef.current >= FALL_FRAME_THRESHOLD_MP
+                          || (Date.now() - lastAlertTimeRef.current < 4000);
+    const statusLabel = isAlertActive ? 'FALL DETECTED!' : poseDetected ? 'SAFE' : 'Detecting...';
+    const statusColor = isAlertActive ? '#ef4444' : poseDetected ? '#10b981' : '#94a3b8';
 
-    // HUD overlays
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fillRect(10, 10, 150, 32);
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(10, 10, 150, 32);
-
-    ctx.fillStyle = statusColor;
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`STATUS: ${statusLabel}`, 20, 30);
-
-    if (isFallDetectedThisFrame && (Date.now() - lastAlertTimeRef.current > 8000)) {
-      lastAlertTimeRef.current = Date.now();
-      handleLocalFallDetected(canvas);
-    }
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.fillRect(8, 8, 240, 40);
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth   = 1;
+    ctx.strokeRect(8, 8, 240, 40);
+    ctx.fillStyle   = statusColor;
+    ctx.font        = 'bold 12px sans-serif';
+    ctx.textAlign   = 'left';
+    ctx.fillText(`STATUS: ${statusLabel}`, 16, 28);
+    ctx.fillStyle = 'rgba(160,160,160,0.7)';
+    ctx.font      = '9px monospace';
+    ctx.fillText(`Spine ${spineAngle.toFixed(1)}°  H/Hip ${hbhRatio.toFixed(2)}  |  MediaPipe AI`, 16, 43);
 
     animationFrameIdRef.current = requestAnimationFrame(processVideoFrame);
   };

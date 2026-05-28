@@ -121,3 +121,18 @@ router.delete('/incident/:id/image', async (req, res) => {
 });
 
 module.exports = router;
+
+// Proxy: analyze-frame — forwards base64 webcam frame to Flask/MediaPipe
+router.post('/analyze-frame', async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${ML_BASE}/api/v1/analyze-frame`,
+      req.body,
+      { headers: { 'Content-Type': 'application/json' }, maxBodyLength: 5*1024*1024, timeout: 3000 }
+    );
+    res.json(response.data);
+  } catch (error) {
+    res.json({ pose_detected: false, spine_angle: 0, head_hip_ratio: 0,
+               fall_risk: false, visibility_ok: false, landmarks_px: null });
+  }
+});
