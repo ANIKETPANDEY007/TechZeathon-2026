@@ -183,26 +183,30 @@ const Login = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-[calc(100vh-80px)] flex items-center justify-center p-4 relative overflow-hidden bg-navy-950/20">
+    <div style={{ minHeight: 'calc(100vh - 68px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem', position: 'relative', overflow: 'hidden', background: '#000' }}>
       
-      {/* Absolute Decorative Blobs */}
-      <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-teal-500/10 rounded-full blur-[100px] pointer-events-none"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-72 h-72 bg-purple-500/10 rounded-full blur-[100px] pointer-events-none"></div>
+      {/* Ambient Glows */}
+      <div style={{ position: 'absolute', top: '15%', left: '15%', width: '40vw', height: '40vw', maxWidth: '500px', maxHeight: '500px', background: 'radial-gradient(circle, rgba(79,142,247,0.07) 0%, transparent 70%)', borderRadius: '50%', filter: 'blur(60px)', pointerEvents: 'none' }} />
+      <div style={{ position: 'absolute', bottom: '15%', right: '10%', width: '35vw', height: '35vw', maxWidth: '400px', maxHeight: '400px', background: 'radial-gradient(circle, rgba(129,140,248,0.06) 0%, transparent 70%)', borderRadius: '50%', filter: 'blur(80px)', pointerEvents: 'none' }} />
 
       <motion.div 
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md glass-panel p-8 border border-white/10 relative z-10"
+        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        style={{ width: '100%', maxWidth: '440px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '24px', padding: '2.25rem', position: 'relative', zIndex: 1, backdropFilter: 'blur(40px)' }}
       >
-        {/* Header Logo & Subtitle */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-teal-500/10 border border-teal-500/20 mb-3 text-teal-400">
-            <ShieldCheck size={36} weight="fill" />
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <div style={{ width: '52px', height: '52px', borderRadius: '14px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem' }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L3 7v5c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5z" fill="#000" />
+              <path d="M9 12l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">
-            {isLogin ? 'Welcome Back' : 'Create Account'}
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'white', letterSpacing: '-0.025em', marginBottom: '0.375rem' }}>
+            {isLogin ? 'Welcome back' : 'Create account'}
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
+          <p style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.4)' }}>
             {isLogin 
               ? 'Secure fall monitoring & distress response' 
               : 'Sign up to configure live ML sensors and alerts'}
@@ -211,155 +215,139 @@ const Login = ({ onLoginSuccess }) => {
 
         {/* Login Tabs */}
         {isLogin && (
-          <div className="flex bg-navy-950/60 p-1 rounded-xl border border-white/5 mb-6 text-xs font-semibold text-slate-400">
-            <button 
-              onClick={() => { setAuthMethod('credentials'); handleKeypadClear(); }}
-              className={`flex-1 py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${authMethod === 'credentials' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/20' : 'hover:text-white'}`}
-            >
-              <Lock size={14} /> Password
-            </button>
-            <button 
-              onClick={() => { setAuthMethod('passcode'); handleKeypadClear(); }}
-              className={`flex-1 py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${authMethod === 'passcode' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/20' : 'hover:text-white'}`}
-            >
-              <Hash size={14} /> Quick PIN
-            </button>
-            <button 
-              onClick={() => { setAuthMethod('sso'); handleKeypadClear(); }}
-              className={`flex-1 py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${authMethod === 'sso' ? 'bg-teal-500/20 text-teal-400 border border-teal-500/20' : 'hover:text-white'}`}
-            >
-              <UserCheck size={14} /> SSO
-            </button>
+          <div style={{ display: 'flex', background: 'rgba(255,255,255,0.03)', padding: '4px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.07)', marginBottom: '1.5rem' }}>
+            {[{key: 'credentials', label: '🔑 Password'}, {key: 'passcode', label: '# Quick PIN'}, {key: 'sso', label: '⚡ SSO'}].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => { setAuthMethod(tab.key); handleKeypadClear(); }}
+                style={{
+                  flex: 1, padding: '0.5rem 0.25rem', borderRadius: '10px', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: '0.75rem', fontWeight: 600, transition: 'all 0.2s',
+                  background: authMethod === tab.key ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  color: authMethod === tab.key ? 'white' : 'rgba(255,255,255,0.4)',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         )}
 
         <AnimatePresence mode="wait">
           {/* LOGIN - CREDENTIALS */}
           {isLogin && authMethod === 'credentials' && (
-            <motion.form 
+            <motion.form
               key="login-credentials"
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               onSubmit={handleLoginSubmit}
-              className="space-y-4"
+              style={{ display: 'flex', flexDirection: 'column', gap: '1.125rem' }}
             >
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Email Address</label>
-                <div className="relative">
-                  <Envelope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="email" 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@carecenter.com" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Email Address</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@carecenter.com"
+                  className="input"
+                  required
+                />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Account Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="password" 
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="input"
+                  required
+                />
               </div>
 
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={isLoading}
-                className="w-full mt-6 py-2.5 px-4 bg-teal-400 hover:bg-teal-500 text-navy-950 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
               >
-                {isLoading ? 'Authorizing...' : 'Sign In'} <ArrowRight weight="bold" size={16} />
+                {isLoading ? 'Signing in...' : 'Sign in'}
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               </button>
             </motion.form>
           )}
 
           {/* LOGIN - PASSCODE KEYPAD */}
           {isLogin && authMethod === 'passcode' && (
-            <motion.form 
+            <motion.form
               key="login-passcode"
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               onSubmit={handlePasscodeSubmit}
-              className="space-y-4 flex flex-col items-center"
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}
             >
-              <div className="space-y-1.5 w-full">
-                <label className="text-xs font-semibold text-slate-300">Confirm Account Email</label>
-                <div className="relative">
-                  <Envelope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="email" 
-                    value={passcodeEmail}
-                    onChange={(e) => setPasscodeEmail(e.target.value)}
-                    placeholder="name@carecenter.com" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', width: '100%' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Account Email</label>
+                <input
+                  type="email"
+                  value={passcodeEmail}
+                  onChange={(e) => setPasscodeEmail(e.target.value)}
+                  placeholder="name@carecenter.com"
+                  className="input"
+                  required
+                />
               </div>
 
-              {/* Pin Indicator */}
-              <div className="flex gap-4 my-3">
+              {/* PIN Indicator */}
+              <div style={{ display: 'flex', gap: '0.75rem', margin: '0.5rem 0' }}>
                 {[...Array(4)].map((_, i) => (
-                  <div 
-                    key={i} 
-                    className={`w-3.5 h-3.5 rounded-full border border-teal-500/40 transition-all duration-150 ${i < passcode.length ? 'bg-teal-400 shadow-[0_0_8px_#2dd4bf]' : 'bg-navy-900'}`}
-                  ></div>
+                  <div
+                    key={i}
+                    style={{
+                      width: '12px', height: '12px', borderRadius: '50%',
+                      border: `1.5px solid ${i < passcode.length ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)'}`,
+                      background: i < passcode.length ? 'white' : 'transparent',
+                      boxShadow: i < passcode.length ? '0 0 10px rgba(255,255,255,0.3)' : 'none',
+                      transition: 'all 0.2s ease',
+                    }}
+                  />
                 ))}
               </div>
 
-              {/* Keypad Interface */}
-              <div className="grid grid-cols-3 gap-3 w-full max-w-[280px]">
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                  <button 
-                    key={num} 
-                    type="button" 
+              {/* Keypad */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', width: '100%', maxWidth: '260px' }}>
+                {[1,2,3,4,5,6,7,8,9].map(num => (
+                  <button
+                    key={num}
+                    type="button"
                     onClick={() => handleKeypadPress(num)}
-                    className="w-16 h-12 mx-auto rounded-xl bg-navy-900 hover:bg-navy-800 text-white font-bold text-lg flex items-center justify-center border border-white/5 cursor-pointer hover:border-teal-400/20 active:scale-95 transition-all"
-                  >
-                    {num}
-                  </button>
+                    style={{
+                      height: '48px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)',
+                      background: 'rgba(255,255,255,0.04)', color: 'white', fontWeight: 700, fontSize: '1.125rem',
+                      cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.09)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                  >{num}</button>
                 ))}
-                <button 
-                  type="button" 
-                  onClick={handleKeypadClear}
-                  className="w-16 h-12 mx-auto rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center border border-red-500/10 cursor-pointer active:scale-95 transition-all text-xs font-semibold"
-                >
-                  <Trash size={18} />
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => handleKeypadPress(0)}
-                  className="w-16 h-12 mx-auto rounded-xl bg-navy-900 hover:bg-navy-800 text-white font-bold text-lg flex items-center justify-center border border-white/5 cursor-pointer hover:border-teal-400/20 active:scale-95 transition-all"
-                >
-                  0
-                </button>
-                <button 
-                  type="button" 
-                  onClick={handleKeypadBackspace}
-                  className="w-16 h-12 mx-auto rounded-xl bg-navy-900 hover:bg-navy-800 text-slate-300 flex items-center justify-center border border-white/5 cursor-pointer active:scale-95 transition-all"
-                >
-                  <Backspace size={20} />
+                <button type="button" onClick={handleKeypadClear} style={{ height: '48px', borderRadius: '12px', border: '1px solid rgba(251,113,133,0.15)', background: 'rgba(251,113,133,0.06)', color: '#fb7185', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.75rem', fontWeight: 600, transition: 'all 0.15s' }}>CLR</button>
+                <button type="button" onClick={() => handleKeypadPress(0)} style={{ height: '48px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: 'white', fontWeight: 700, fontSize: '1.125rem', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.09)'} onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}>0</button>
+                <button type="button" onClick={handleKeypadBackspace} style={{ height: '48px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.09)'} onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2zM18 9l-6 6M12 9l6 6"/></svg>
                 </button>
               </div>
 
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={isLoading || passcode.length !== 4}
-                className="w-full mt-4 py-2.5 px-4 bg-teal-400 hover:bg-teal-500 text-navy-950 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center' }}
               >
-                {isLoading ? 'Verifying PIN...' : 'Verify Passcode'} <ArrowRight weight="bold" size={16} />
+                {isLoading ? 'Verifying...' : 'Verify PIN'}
               </button>
             </motion.form>
           )}
@@ -409,113 +397,70 @@ const Login = ({ onLoginSuccess }) => {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
               onSubmit={handleRegisterSubmit}
-              className="space-y-3.5"
+              style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
             >
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300">Name</label>
-                <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="text" 
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="Full name" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Full Name</label>
+                <input type="text" value={regName} onChange={(e) => setRegName(e.target.value)} placeholder="Your full name" className="input" required />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300">Email Address</label>
-                <div className="relative">
-                  <Envelope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="email" 
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
-                    placeholder="name@carecenter.com" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Email Address</label>
+                <input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} placeholder="name@carecenter.com" className="input" required />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="password" 
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="Minimum 6 characters" 
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                    required
-                  />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Password</label>
+                <input type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} placeholder="Minimum 6 characters" className="input" required />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300">Quick Passcode PIN (Optional)</label>
-                <div className="relative">
-                  <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="text" 
-                    value={regPasscode}
-                    onChange={(e) => setRegPasscode(e.target.value)}
-                    placeholder="4-digit PIN (e.g. 1234)" 
-                    maxLength={4}
-                    className="w-full bg-navy-950/60 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/30 transition-all font-medium"
-                  />
-                </div>
-                <p className="text-[10px] text-slate-500">Configures secure quick pin-based authentication.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Quick PIN <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, opacity: 0.5 }}>(optional)</span></label>
+                <input type="text" value={regPasscode} onChange={(e) => setRegPasscode(e.target.value)} placeholder="4-digit PIN" maxLength={4} className="input" />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300">Role / Position</label>
-                <select 
-                  value={regRole}
-                  onChange={(e) => setRegRole(e.target.value)}
-                  className="w-full bg-navy-950 border border-white/10 rounded-xl py-2.5 px-4 text-sm text-slate-300 focus:outline-none focus:border-teal-400/50 transition-all font-medium"
-                >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Role</label>
+                <select value={regRole} onChange={(e) => setRegRole(e.target.value)} className="input" style={{ cursor: 'pointer' }}>
                   <option value="caregiver">Caregiver / Staff</option>
                   <option value="family">Family Member</option>
                   <option value="administrator">Administrator</option>
                 </select>
               </div>
 
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={isLoading}
-                className="w-full mt-4 py-2.5 px-4 bg-teal-400 hover:bg-teal-500 text-navy-950 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="btn btn-primary"
+                style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
               >
-                {isLoading ? 'Creating Account...' : 'Register'} <ArrowRight weight="bold" size={16} />
+                {isLoading ? 'Creating account...' : 'Create account'}
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               </button>
             </motion.form>
           )}
         </AnimatePresence>
 
         {/* Footer State Toggle */}
-        <div className="mt-8 pt-6 border-t border-white/5 text-center text-xs text-slate-400">
+        <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.06)', textAlign: 'center', fontSize: '0.8125rem', color: 'rgba(255,255,255,0.35)' }}>
           {isLogin ? (
             <p>
-              Need a care account?{' '}
-              <button 
+              Don't have an account?{' '}
+              <button
                 onClick={() => { setIsLogin(false); handleKeypadClear(); }}
-                className="text-teal-400 hover:underline font-semibold cursor-pointer"
+                style={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', fontFamily: 'inherit', fontSize: 'inherit', textDecoration: 'underline', textUnderlineOffset: '3px' }}
               >
-                Register here
+                Sign up
               </button>
             </p>
           ) : (
             <p>
-              Already registered?{' '}
-              <button 
+              Already have an account?{' '}
+              <button
                 onClick={() => { setIsLogin(true); handleKeypadClear(); }}
-                className="text-teal-400 hover:underline font-semibold cursor-pointer"
+                style={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', fontFamily: 'inherit', fontSize: 'inherit', textDecoration: 'underline', textUnderlineOffset: '3px' }}
               >
-                Sign in here
+                Sign in
               </button>
             </p>
           )}
