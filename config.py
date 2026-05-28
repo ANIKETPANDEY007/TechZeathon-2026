@@ -11,7 +11,7 @@ class Config:
     ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:5500,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4000,http://127.0.0.1:4000').split(',')
     
     # MongoDB Connection URL
-    MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/fallingdown')
+    MONGO_URI = os.getenv('MONGO_URI') or os.getenv('MONGODB_URI') or 'mongodb://localhost:27017/fallingdown'
     
     # Twilio Alerts Configuration
     TWILIO_SID = os.getenv('TWILIO_ACCOUNT_SID')
