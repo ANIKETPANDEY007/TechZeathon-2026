@@ -1,3 +1,7 @@
+"""
+FallingDown AI — pose_detector.py
+MediaPipe Tasks API (v0.10+) — skeleton-based fall detection
+"""
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -13,8 +17,13 @@ from datetime import datetime
 from collections import deque
 import math
 
+# MediaPipe Tasks API (works with mediapipe >=0.10)
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
+
 # =========================
-# CONFIGURATION MANAGEMENT
+# CONFIGURATION
 # =========================
 def load_config():
     try:
@@ -22,7 +31,7 @@ def load_config():
             print("📖 Loaded configuration from detector_config.json")
             return json.load(f)
     except FileNotFoundError:
-        print("⚠️ detector_config.json not found. Using script defaults.")
+        print("⚠️  detector_config.json not found. Using defaults.")
         return {}
 
 CONFIG = load_config()
@@ -36,12 +45,36 @@ FALL_FRAME_THRESHOLD = CONFIG.get('fall_frame_threshold', 5)
 ALERT_COOLDOWN_SECONDS = CONFIG.get('alert_cooldown_seconds', 5)
 AUDIO_ENABLED = CONFIG.get('audio_enabled', True)
 
-# Global Tracking States
-latest_status = "SAFE"
+# ── Fall detection thresholds ────────────────────────────────────────────────
+# Spine angle from vertical (shoulder→hip line).
+#   0° = upright,  90° = horizontal
+SPINE_ANGLE_THRESHOLD = CONFIG.get('spine_angle_threshold', 50)
+
+# Head-below-hip ratio (nose_y / hip_y in normalised [0,1] coords).
+#   < 1.0 = head above hips (normal)
+#   > 1.0 = head below hips (strong fall sign)
+HEAD_BELOW_HIP_RATIO  = CONFIG.get('head_below_hip_ratio',  0.85)
+
+# Consecutive frames where BOTH conditions are true before alert fires
+FALL_FRAME_THRESHOLD  = CONFIG.get('fall_frame_threshold',  20)
+
+# Path to the downloaded .task model file
+MODEL_PATH = CONFIG.get('model_path', 'pose_landmarker.task')
+
+# Landmark indices used by PoseLandmarker (33-point model)
+IDX_NOSE           = 0
+IDX_LEFT_SHOULDER  = 11
+IDX_RIGHT_SHOULDER = 12
+IDX_LEFT_HIP       = 23
+IDX_RIGHT_HIP      = 24
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Globals
 alert_triggered = False
 last_alert_time = 0
 audio_listening = True
-cap = None
+cap             = None
+
 
 # Voice alerts rolling window
 distress_timestamps = deque()
@@ -52,35 +85,78 @@ voice_critical_active = False
 data_lock = threading.Lock()
 
 # =========================
-# SIGNAL TERMINATIONS
+# SIGNAL HANDLER
 # =========================
 def shutdown_handler(sig, frame):
     global audio_listening, cap
-    print("\n🛑 Shutting down edge client gracefully...")
+    print("\n🛑 Shutting down gracefully...")
     audio_listening = False
-    if cap is not None:
+    if cap:
         cap.release()
     cv2.destroyAllWindows()
     sys.exit(0)
 
-signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGINT,  shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
+
+
+# =========================
+# GEOMETRY
+# =========================
+def spine_angle_from_vertical(landmarks, img_w, img_h):
+    """
+    Returns (angle_deg, shoulder_px, hip_px, nose_px) or None if
+    landmark confidence is too low.
+
+    angle_deg:
+        0°  = perfectly upright
+        90° = fully horizontal (fallen)
+    """
+    ls   = landmarks[IDX_LEFT_SHOULDER]
+    rs   = landmarks[IDX_RIGHT_SHOULDER]
+    lh   = landmarks[IDX_LEFT_HIP]
+    rh   = landmarks[IDX_RIGHT_HIP]
+    nose = landmarks[IDX_NOSE]
+
+    # Visibility is in .visibility  (Tasks API uses NormalizedLandmark)
+    vis  = min(ls.visibility or 0, rs.visibility or 0,
+               lh.visibility or 0, rh.visibility or 0)
+    if vis < 0.5:
+        return None
+
+    # Convert to pixel coordinates
+    sx = int((ls.x + rs.x) / 2 * img_w)
+    sy = int((ls.y + rs.y) / 2 * img_h)
+    hx = int((lh.x + rh.x) / 2 * img_w)
+    hy = int((lh.y + rh.y) / 2 * img_h)
+    nx = int(nose.x * img_w)
+    ny = int(nose.y * img_h)
+
+    # Angle from vertical
+    dx  = sx - hx
+    dy  = sy - hy   # negative when shoulder is ABOVE hip (normal standing)
+    angle = float(np.degrees(np.arctan2(abs(dx), abs(dy) or 1)))
+
+    # Head-below-hip ratio (normalised coords)
+    hip_y_norm = (lh.y + rh.y) / 2
+    hbh        = float(nose.y / hip_y_norm) if hip_y_norm > 0.01 else 0.0
+
+    return angle, hbh, (sx, sy), (hx, hy), (nx, ny)
+
 
 # =========================
 # INCIDENT DISPATCHER
 # =========================
 def send_incident(fall_detected, movement_status, is_critical, location, frame=None):
     global last_alert_time, alert_triggered
-    current_time = time.time()
-    
-    if current_time - last_alert_time < ALERT_COOLDOWN_SECONDS:
+    now = time.time()
+    if now - last_alert_time < ALERT_COOLDOWN:
         return
-    last_alert_time = current_time
+    last_alert_time = now
 
     image_filename = None
     if frame is not None:
-        filename = f"incident_{int(time.time())}.jpg"
-        temp_path = os.path.join("uploads", filename)
+        fname = f"incident_{int(time.time())}.jpg"
         os.makedirs("uploads", exist_ok=True)
         cv2.imwrite(temp_path, frame)
         image_filename = filename
@@ -96,22 +172,23 @@ def send_incident(fall_detected, movement_status, is_critical, location, frame=N
 
     headers = {'Content-Type': 'application/json'}
     if API_KEY:
-        headers['X-API-Key'] = API_KEY
+        headers["X-API-Key"] = API_KEY
 
     try:
         url = f"{API_BASE}/api/v1/incident" # Change this endpoint if your Flask backend uses /api/incident instead
         res = requests.post(url, json=payload, headers=headers, timeout=10)
         
         if res.status_code == 201:
-            print(f"🚨 Incident logged successfully in backend: {movement_status.upper()}")
+            print(f"🚨 Incident logged: {movement_status.upper()}")
             alert_triggered = True
         else:
-            print(f"❌ Failed to log incident: {res.status_code} - {res.text}")
+            print(f"❌ Backend error: {res.status_code} — {res.text}")
     except Exception as e:
-        print(f"❌ Connection error posting incident: {e}")
+        print(f"❌ Connection error: {e}")
+
 
 # =========================
-# SPEECH AUDIO DISTRESS
+# AUDIO DISTRESS
 # =========================
 def audio_listener():
     global audio_listening, distress_timestamps, voice_normal_active, voice_critical_active
@@ -120,7 +197,7 @@ def audio_listener():
     try:
         mic = sr.Microphone()
     except Exception as ex:
-        print(f"❌ Failed to acquire microphone hardware: {ex}. Audio tracking disabled.")
+        print(f"❌ Mic error: {ex}")
         return
 
     print("🎙️ Audio distress listener started. Calibrating...")
@@ -181,15 +258,14 @@ def audio_listener():
             pass 
         except sr.UnknownValueError:
             pass
-        except sr.RequestError as e:
-            print(f"⚠️ Speech Recognition service failure: {e}")
         except Exception as e:
             if audio_listening:
                 print(f"⚠️ Audio listener exception: {e}")
                 time.sleep(2)
 
+
 # =========================
-# BACKEND CONNECTION RETRY
+# BACKEND PROBE
 # =========================
 def wait_for_backend():
     attempts = CONFIG.get('reconnect_attempts', 5)
@@ -199,20 +275,49 @@ def wait_for_backend():
     
     for attempt in range(1, attempts + 1):
         try:
-            res = requests.get(f"{API_BASE}/api/v1/status", timeout=3)
-            if res.status_code == 200:
-                print("✅ Successfully connected to backend API.")
+            r = requests.get(f"{API_BASE}/api/v1/status", timeout=3)
+            if r.status_code == 200:
+                print("✅ Backend connected.")
                 return True
         except Exception:
             pass
-        print(f"⏳ Backend not ready. Attempt {attempt}/{attempts}. Retrying in {delay}s...")
+        print(f"⏳ Attempt {i}/{attempts} — retrying in {delay}s …")
         time.sleep(delay)
-        
-    print("⚠️ Backend unreachable after all attempts. Starting in offline local capture mode.")
+    print("⚠️  Backend unreachable — offline mode.")
     return False
 
+
 # =========================
-# MAIN EXECUTION
+# DRAW SKELETON CONNECTIONS
+# =========================
+POSE_CONNECTIONS = [
+    # Torso
+    (11, 12), (11, 23), (12, 24), (23, 24),
+    # Left arm
+    (11, 13), (13, 15),
+    # Right arm
+    (12, 14), (14, 16),
+    # Left leg
+    (23, 25), (25, 27),
+    # Right leg
+    (24, 26), (26, 28),
+]
+
+def draw_skeleton(disp, landmarks, img_w, img_h, color=(0, 220, 50)):
+    pts = {}
+    for idx, lm in enumerate(landmarks):
+        px = int(lm.x * img_w)
+        py = int(lm.y * img_h)
+        pts[idx] = (px, py)
+        cv2.circle(disp, (px, py), 4, (255, 200, 0), -1)
+
+    for (a, b) in POSE_CONNECTIONS:
+        if a in pts and b in pts:
+            cv2.line(disp, pts[a], pts[b], color, 2)
+
+
+# =========================
+# MAIN
 # =========================
 def main():
     global cap, alert_triggered, voice_normal_active, voice_critical_active, distress_timestamps
@@ -220,14 +325,11 @@ def main():
     wait_for_backend()
 
     if AUDIO_ENABLED:
-        audio_thread = threading.Thread(target=audio_listener, daemon=True)
-        audio_thread.start()
-    else:
-        print("Static configuration has 'audio_enabled': false. Audio thread disabled.")
+        threading.Thread(target=audio_listener, daemon=True).start()
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
-        print(f"❌ Error: Could not open Video Capture index: {CAMERA_INDEX}")
+        print(f"❌ Cannot open camera {CAMERA_INDEX}")
         return
 
     mp_pose = mp.solutions.pose
@@ -253,7 +355,7 @@ def main():
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print("❌ Capture frame empty. Exiting feed loop.")
+            print("❌ Empty frame — exiting.")
             break
 
         frame = cv2.flip(frame, 1)
@@ -408,14 +510,8 @@ def main():
         if key == ord('q'):
             break
         elif key == ord('f'):
-            print("⌨️ Forced Fall incident Simulation...")
-            send_incident(
-                fall_detected=True,
-                movement_status="fall_detected",
-                is_critical=True,
-                location=CAMERA_LOCATION,
-                frame=frame
-            )
+            print("⌨️  Forced fall …")
+            send_incident(True, "fall_detected", True, CAMERA_LOCATION, frame=frame)
         elif key == ord('a'):
             print("⌨️ Forced Audio distress Simulation...")
             send_incident(
@@ -436,8 +532,10 @@ def main():
                 voice_normal_active = False
                 voice_critical_active = False
 
+    landmarker.close()
     cap.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()

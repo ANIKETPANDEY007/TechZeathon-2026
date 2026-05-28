@@ -377,6 +377,96 @@ def serve_uploaded_file(filename):
         filename
     )
 
+
+# =========================
+# MEDIAPIPE FRAME ANALYSIS
+# =========================
+_pose_instance = None
+_pose_lock = threading.Lock()
+
+def get_pose():
+    global _pose_instance
+    with _pose_lock:
+        if _pose_instance is None:
+            try:
+                import mediapipe as mp
+                _pose_instance = mp.solutions.pose.Pose(
+                    static_image_mode=True,
+                    model_complexity=1,
+                    min_detection_confidence=0.55,
+                    min_tracking_confidence=0.55,
+                )
+                logger.info("MediaPipe Pose initialised for /analyze-frame")
+            except Exception as e:
+                logger.error(f"MediaPipe failed to load: {e}")
+                _pose_instance = "unavailable"
+    return _pose_instance
+
+@app.route('/api/v1/analyze-frame', methods=['POST'])
+@limiter.limit("120 per minute")
+def analyze_frame():
+    """Accepts base64 JPEG frame, runs MediaPipe Pose, returns spine angle & fall_risk."""
+    import base64, cv2
+    import numpy as np
+    raw = request.get_json(silent=True) or {}
+    frame_b64 = raw.get('frame')
+    if not frame_b64:
+        return jsonify({"error": "No frame provided"}), 400
+    try:
+        if ',' in frame_b64:
+            frame_b64 = frame_b64.split(',', 1)[1]
+        frame_bgr = cv2.imdecode(np.frombuffer(base64.b64decode(frame_b64), np.uint8), cv2.IMREAD_COLOR)
+        if frame_bgr is None:
+            raise ValueError("decode failed")
+    except Exception as e:
+        return jsonify({"error": f"Frame decode: {e}"}), 400
+
+    h, w = frame_bgr.shape[:2]
+    pose = get_pose()
+    if not pose or pose == "unavailable":
+        return jsonify({"error": "MediaPipe unavailable"}), 503
+
+    try:
+        import mediapipe as mp
+        result = pose.process(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    except Exception as e:
+        return jsonify({"error": f"Pose error: {e}"}), 500
+
+    if not result.pose_landmarks:
+        return jsonify({"pose_detected": False, "spine_angle": 0.0,
+                        "head_hip_ratio": 0.0, "fall_risk": False,
+                        "visibility_ok": False, "landmarks_px": None})
+
+    lm  = result.pose_landmarks.landmark
+    PL  = mp.solutions.pose.PoseLandmark
+    ls, rs   = lm[PL.LEFT_SHOULDER], lm[PL.RIGHT_SHOULDER]
+    lhp, rhp = lm[PL.LEFT_HIP],      lm[PL.RIGHT_HIP]
+    nose     = lm[PL.NOSE]
+
+    vis_ok = min(ls.visibility, rs.visibility, lhp.visibility, rhp.visibility) >= 0.55
+    spine_angle = hbh_ratio = 0.0
+    landmarks_px = None
+
+    if vis_ok:
+        sx, sy = int((ls.x + rs.x) / 2 * w), int((ls.y + rs.y) / 2 * h)
+        hx, hy = int((lhp.x + rhp.x) / 2 * w), int((lhp.y + rhp.y) / 2 * h)
+        spine_angle = float(np.degrees(np.arctan2(abs(sx - hx), abs(sy - hy) or 1)))
+        hip_y = (lhp.y + rhp.y) / 2
+        hbh_ratio = float(nose.y / hip_y) if hip_y > 0.01 else 0.0
+        landmarks_px = {"shoulder": [sx, sy], "hip": [hx, hy],
+                        "nose": [int(nose.x * w), int(nose.y * h)]}
+
+    fall_risk = vis_ok and spine_angle >= 50 and hbh_ratio >= 0.85
+    return jsonify({
+        "pose_detected": True,
+        "spine_angle": round(spine_angle, 2),
+        "head_hip_ratio": round(hbh_ratio, 3),
+        "fall_risk": fall_risk,
+        "visibility_ok": vis_ok,
+        "landmarks_px": landmarks_px,
+        "thresholds": {"spine_angle": 50, "head_hip_ratio": 0.85}
+    })
+
 @app.route('/api/v1/upload', methods=['POST'])
 @app.route('/api/upload', methods=['POST'])
 @require_api_key
