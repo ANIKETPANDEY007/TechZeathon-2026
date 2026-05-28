@@ -1,6 +1,6 @@
 {
     "api_base": "http://localhost:5000",
-    "api_key": "",
+    "api_key": "change-this-to-a-secure-random-api-key",
     "camera_index": 0,
     "camera_location": "Camera 01",
     "fall_frame_threshold": 8,

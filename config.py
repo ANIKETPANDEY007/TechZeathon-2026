@@ -8,7 +8,7 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'default-unsecure-secret-key-change-it')
     
     # CORS
-    ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:5500').split(',')
+    ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:5500,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4000,http://127.0.0.1:4000').split(',')
     
     # MongoDB Connection URL
     MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/fallingdown')

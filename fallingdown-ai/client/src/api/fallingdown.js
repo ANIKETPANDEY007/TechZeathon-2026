@@ -22,7 +22,7 @@ export const fetchLogs = () => axios.get(`${API_BASE}/api/logs`);
 
 export const postIncident = (data) => axios.post(`${API_BASE}/api/incident`, data);
 
-export const uploadPhoto = (formData) => axios.post(`${ML_BASE}/api/upload`, formData);
+export const uploadPhoto = (formData) => axios.post(`${API_BASE}/api/upload`, formData);
 
 export const fetchLeads = () => axios.get(`${API_BASE}/api/leads`);
 
